@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import pika, json, time, psutil, socket, signal, sys
 
 def shutdown(signum, frame):

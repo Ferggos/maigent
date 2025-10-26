@@ -5,14 +5,16 @@ echo "[*] Building manager..."
 cmake -B build -S .
 cmake --build build -j$(nproc)
 
+echo "[*] Starting manager..."
+./build/manager &
+sleep 2
+
 echo "[*] Starting agents..."
 python3 agents/system_monitor.py &
 python3 agents/scheduler.py &
 sleep 1
 
-echo "[*] Starting manager..."
-./build/manager &
-sleep 2
-
 echo "[*] Running create_agent..."
-python3 agents/create_agent.py
+python3 agents/create_agent.py 128 &
+sleep 5 &
+python3 agents/create_agent.py 120000

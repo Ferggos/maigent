@@ -77,6 +77,7 @@ target_link_libraries(system_monitor_core PUBLIC ma_common)
 target_compile_features(system_monitor_core PUBLIC cxx_std_20)
 
 add_library(planner_core STATIC
+  src/planner/model_contract.cpp
   src/planner/policy_engine_heuristic.cpp
 )
 target_link_libraries(planner_core PUBLIC ma_common)

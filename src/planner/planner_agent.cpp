@@ -15,7 +15,7 @@
 #include "maigent/common/message_helpers.h"
 #include "maigent/common/nats_wrapper.h"
 #include "maigent/common/time_utils.h"
-#include "maigent/planner/policy_engine.h"
+#include "maigent/planner/planner_model.h"
 
 namespace {
 
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  maigent::HeuristicPolicyEngine policy(max_actions);
+  maigent::HeuristicPlannerModel planner_model(max_actions);
 
   std::mutex mu;
   PlannerState st;
@@ -197,6 +197,7 @@ int main(int argc, char** argv) {
     maigent::ForecastState forecast;
     maigent::CapacityState capacity;
     maigent::TargetsState targets;
+    int active_tasks_count = 0;
     int64_t last_action_ms = 0;
 
     {
@@ -205,15 +206,20 @@ int main(int argc, char** argv) {
       forecast = st.forecast;
       capacity = st.capacity;
       targets = st.targets;
+      active_tasks_count = static_cast<int>(st.active_tasks.size());
       last_action_ms = st.last_action_ms;
     }
 
     const int64_t now = maigent::NowMs();
     if (pressure.ts_ms() > 0 && now - last_action_ms >= cooldown_ms) {
-      auto actions = policy.Evaluate(pressure, forecast, capacity, targets);
-      if (!actions.empty()) {
-        for (const auto& action : actions) {
-          dispatch_action(action, maigent::MakeTraceId());
+      const maigent::PlannerModelInput model_input =
+          maigent::ToPlannerModelInput(pressure, forecast, capacity, targets,
+                                       active_tasks_count);
+      const maigent::PlannerModelOutput model_output =
+          planner_model.Evaluate(model_input);
+      if (!model_output.actions.empty()) {
+        for (const auto& action : model_output.actions) {
+          dispatch_action(maigent::ToProtoControlAction(action), maigent::MakeTraceId());
         }
         std::lock_guard<std::mutex> lock(mu);
         st.last_action_ms = now;

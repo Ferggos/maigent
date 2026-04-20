@@ -30,6 +30,14 @@
 
 Наружные runtime публикации остаются прежними: `PressureState`, `ForecastState`, `CapacityState`, `TargetsState`.
 
+## Planner Model Contract
+
+Внутри `planner_agent` введён стабильный internal decision-model contract:
+- `PlannerModelInput` (snapshot pressure/forecast/capacity/targets + local planner context)
+- `PlannerModelOutput` (ordered decision actions до runtime-mapping)
+
+Runtime-контур сохранён: planner по-прежнему потребляет существующие state messages и публикует существующие `ControlAction`.
+
 ## Build
 
 ```bash

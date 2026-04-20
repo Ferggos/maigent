@@ -1,9 +1,9 @@
-#include "maigent/agent_lifecycle.h"
+#include "maigent/common/agent_lifecycle.h"
 
 #include <chrono>
 
-#include "maigent/constants.h"
-#include "maigent/message_utils.h"
+#include "maigent/common/constants.h"
+#include "maigent/common/message_helpers.h"
 
 namespace maigent {
 
@@ -25,11 +25,10 @@ void AgentLifecycle::Start(int heartbeat_ms) {
     return;
   }
 
-  Publish(kSubjectAgentRegister, maigent::AGENT_HEALTH_OK);
-
+  Publish(kSubjectAgentRegister, AGENT_REGISTER, AGENT_HEALTH_OK);
   thread_ = std::thread([this, heartbeat_ms]() {
     while (running_.load()) {
-      Publish(kSubjectAgentHeartbeat, maigent::AGENT_HEALTH_OK);
+      Publish(kSubjectAgentHeartbeat, AGENT_HEARTBEAT, AGENT_HEALTH_OK);
       std::this_thread::sleep_for(std::chrono::milliseconds(heartbeat_ms));
     }
   });
@@ -45,15 +44,25 @@ void AgentLifecycle::Stop(bool publish_goodbye) {
   }
 
   if (publish_goodbye) {
-    Publish(kSubjectAgentGoodbye, maigent::AGENT_HEALTH_DEAD);
+    Publish(kSubjectAgentGoodbye, AGENT_GOODBYE, AGENT_HEALTH_DEAD);
   }
 }
 
-void AgentLifecycle::Publish(const std::string& subject, maigent::AgentHealth health) {
-  maigent::Envelope env;
-  FillHeader(&env, maigent::AGENT_HEARTBEAT, role_, agent_id_);
-  auto hb = MakeAgentHeartbeat(agent_id_, role_, capabilities_, inflight_fn_(), health);
-  *env.mutable_agent_heartbeat() = std::move(hb);
+void AgentLifecycle::Publish(const std::string& subject, AgentSignalType signal_type,
+                             AgentHealth health) {
+  Envelope env;
+  MessageKind kind = MK_UNSPECIFIED;
+  if (signal_type == AGENT_REGISTER) {
+    kind = MK_AGENT_REGISTER;
+  } else if (signal_type == AGENT_HEARTBEAT) {
+    kind = MK_AGENT_HEARTBEAT;
+  } else if (signal_type == AGENT_GOODBYE) {
+    kind = MK_AGENT_GOODBYE;
+  }
+  FillHeader(&env, SERVICE, kind, role_, agent_id_);
+  *env.mutable_service()->mutable_agent_heartbeat() =
+      MakeAgentHeartbeat(agent_id_, role_, capabilities_, inflight_fn_(), health,
+                         signal_type);
   nats_->PublishEnvelope(subject, env);
 }
 

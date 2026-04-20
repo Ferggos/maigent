@@ -1,50 +1,79 @@
-#include "maigent/logging.h"
+#include "maigent/common/logging.h"
 
-#include <chrono>
-#include <ctime>
-#include <iomanip>
+#include <filesystem>
 #include <iostream>
-#include <mutex>
-#include <sstream>
+
+#include "maigent/common/time_utils.h"
 
 namespace maigent {
+
 namespace {
 
-std::mutex g_log_mu;
-
-std::string Timestamp() {
-  using Clock = std::chrono::system_clock;
-  const auto now = Clock::now();
-  const auto tt = Clock::to_time_t(now);
-  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                now.time_since_epoch()) %
-            1000;
-  std::tm tm{};
-  localtime_r(&tt, &tm);
-  std::ostringstream oss;
-  oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << '.' << std::setw(3)
-      << std::setfill('0') << ms.count();
-  return oss.str();
-}
-
-void Log(const char* level, const std::string& who, const std::string& message) {
-  std::lock_guard<std::mutex> lock(g_log_mu);
-  std::cerr << Timestamp() << " [" << level << "] [" << who << "] " << message
-            << '\n';
+std::string Escape(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char c : value) {
+    if (c == '"') {
+      out += "\\\"";
+    } else if (c == '\\') {
+      out += "\\\\";
+    } else if (c == '\n') {
+      out += "\\n";
+    } else {
+      out += c;
+    }
+  }
+  return out;
 }
 
 }  // namespace
 
-void LogInfo(const std::string& who, const std::string& message) {
-  Log("INFO", who, message);
+AgentLogger::AgentLogger(std::string agent_id, std::string file_path, bool also_stderr)
+    : agent_id_(std::move(agent_id)),
+      file_path_(std::move(file_path)),
+      also_stderr_(also_stderr) {
+  std::filesystem::path p(file_path_);
+  if (!p.parent_path().empty()) {
+    std::error_code ec;
+    std::filesystem::create_directories(p.parent_path(), ec);
+  }
+  out_.open(file_path_, std::ios::out | std::ios::app);
 }
 
-void LogWarn(const std::string& who, const std::string& message) {
-  Log("WARN", who, message);
+void AgentLogger::Info(const std::string& message, const LogContext& ctx) {
+  Log("INFO", message, ctx);
 }
 
-void LogError(const std::string& who, const std::string& message) {
-  Log("ERROR", who, message);
+void AgentLogger::Warn(const std::string& message, const LogContext& ctx) {
+  Log("WARN", message, ctx);
+}
+
+void AgentLogger::Error(const std::string& message, const LogContext& ctx) {
+  Log("ERROR", message, ctx);
+}
+
+void AgentLogger::Debug(const std::string& message, const LogContext& ctx) {
+  Log("DEBUG", message, ctx);
+}
+
+void AgentLogger::Log(const std::string& level, const std::string& message,
+                      const LogContext& ctx) {
+  const int64_t now = NowMs();
+  const std::string line =
+      FormatTs(now) + " level=" + level + " agent_id=" + agent_id_ +
+      " request_id=" + (ctx.request_id.empty() ? "-" : ctx.request_id) +
+      " task_id=" + (ctx.task_id.empty() ? "-" : ctx.task_id) +
+      " trace_id=" + (ctx.trace_id.empty() ? "-" : ctx.trace_id) +
+      " msg=\"" + Escape(message) + "\"";
+
+  std::lock_guard<std::mutex> lock(mu_);
+  if (out_.is_open()) {
+    out_ << line << '\n';
+    out_.flush();
+  }
+  if (also_stderr_) {
+    std::cerr << line << '\n';
+  }
 }
 
 }  // namespace maigent

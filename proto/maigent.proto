@@ -2,48 +2,95 @@ syntax = "proto3";
 
 package maigent;
 
-enum MsgType {
-  MSG_TYPE_UNSPECIFIED = 0;
-  SUBMIT_TASK = 1;
-  SUBMIT_REPLY = 2;
-  LEASE_RESERVE = 3;
-  LEASE_DECISION = 4;
-  LEASE_COMMIT = 5;
-  LEASE_RELEASE = 6;
-  LAUNCH_TASK = 7;
-  TASK_EVENT = 8;
-  CONTROL_ACTION = 9;
-  CONTROL_APPLIED = 10;
-  PRESSURE_UPDATE = 11;
-  FORECAST_UPDATE = 12;
-  AGENT_HEARTBEAT = 13;
-  DIR_SNAPSHOT = 14;
-  BENCH_START = 15;
-  BENCH_STOP = 16;
-  SYSTEM_STATUS = 17;
+enum MessageCategory {
+  COMMAND = 0;
+  EVENT = 1;
+  STATE = 2;
+  SERVICE = 3;
+}
+
+enum MessageKind {
+  MK_UNSPECIFIED = 0;
+
+  MK_TASK_SUBMIT = 1;
+  MK_TASK_SUBMIT_REPLY = 2;
+  MK_TASK_STATUS_REQUEST = 3;
+  MK_TASK_STATUS_RESPONSE = 4;
+
+  MK_SYSTEM_STATUS_REQUEST = 5;
+  MK_SYSTEM_STATUS_RESPONSE = 6;
+
+  MK_LEASE_RESERVE = 7;
+  MK_LEASE_DECISION = 8;
+  MK_LEASE_COMMIT = 9;
+  MK_LEASE_RELEASE = 10;
+
+  MK_TASK_LAUNCH = 11;
+  MK_TASK_CONTROL = 12;
+  MK_ACTUATOR_APPLY = 13;
+
+  MK_TASK_SUBMITTED = 14;
+  MK_TASK_QUEUED = 15;
+  MK_TASK_DEQUEUED = 16;
+  MK_TASK_STARTED = 17;
+  MK_TASK_FINISHED = 18;
+  MK_TASK_FAILED = 19;
+  MK_TASK_QUEUE_TIMEOUT = 20;
+
+  MK_CONTROL_APPLIED = 21;
+  MK_CONTROL_FAILED = 22;
+  MK_ACTUATOR_APPLIED = 23;
+  MK_ACTUATOR_FAILED = 24;
+  MK_LEASE_DENIED = 25;
+  MK_LEASE_EXPIRED = 26;
+
+  MK_PRESSURE_STATE = 27;
+  MK_FORECAST_STATE = 28;
+  MK_CAPACITY_STATE = 29;
+  MK_TARGETS_STATE = 30;
+
+  MK_AGENT_REGISTER = 31;
+  MK_AGENT_HEARTBEAT = 32;
+  MK_AGENT_GOODBYE = 33;
+
+  MK_DIRECTORY_SNAPSHOT_REQUEST = 34;
+  MK_DIRECTORY_SNAPSHOT_RESPONSE = 35;
+
+  MK_BENCH_START = 36;
+  MK_BENCH_STOP = 37;
 }
 
 enum SubmitStatus {
   SUBMIT_STATUS_UNSPECIFIED = 0;
-  ACCEPTED = 1;
-  DENIED = 2;
-  FAILED = 3;
-  TIMEOUT = 4;
+  SUBMIT_ACCEPTED = 1;
+  SUBMIT_DENIED = 2;
+  SUBMIT_FAILED = 3;
+  SUBMIT_TIMEOUT = 4;
 }
 
 enum WaitMode {
   WAIT_MODE_UNSPECIFIED = 0;
-  NO_WAIT = 1;
-  WAIT_FOR_START = 2;
-  WAIT_FOR_FINISH = 3;
+  WAIT_NO_WAIT = 1;
+  WAIT_START = 2;
+  WAIT_FINISH = 3;
 }
 
 enum LeaseState {
   LEASE_STATE_UNSPECIFIED = 0;
-  RESERVED = 1;
-  COMMITTED = 2;
-  RELEASED = 3;
-  EXPIRED = 4;
+  LEASE_RESERVED = 1;
+  LEASE_COMMITTED = 2;
+  LEASE_RELEASED = 3;
+  LEASE_EXPIRED = 4;
+}
+
+enum LeaseDecisionReasonCode {
+  LEASE_REASON_NONE = 0;
+  LEASE_REASON_NO_SLOTS = 1;
+  LEASE_REASON_NO_CAPACITY = 2;
+  LEASE_REASON_POLICY_FORBIDDEN = 3;
+  LEASE_REASON_INVALID_REQUEST = 4;
+  LEASE_REASON_LIMIT_EXCEEDED = 5;
+  LEASE_REASON_INTERNAL_ERROR = 6;
 }
 
 enum TaskEventType {
@@ -52,22 +99,44 @@ enum TaskEventType {
   TASK_STARTED = 2;
   TASK_FINISHED = 3;
   TASK_FAILED = 4;
+  TASK_QUEUED = 5;
+  TASK_DEQUEUED = 6;
+  TASK_QUEUE_TIMEOUT = 7;
+}
+
+enum TargetType {
+  TARGET_TYPE_UNSPECIFIED = 0;
+  TARGET_TASK = 1;
+  TARGET_PROCESS = 2;
+  TARGET_CGROUP = 3;
+  TARGET_SYSTEM = 4;
+}
+
+enum TargetSourceType {
+  TARGET_SOURCE_UNSPECIFIED = 0;
+  MANAGED_TASK = 1;
+  EXTERNAL_GROUP = 2;
+  EXTERNAL_PROCESS = 3;
+  SYSTEM_SERVICE = 4;
 }
 
 enum ControlActionType {
   CONTROL_ACTION_UNSPECIFIED = 0;
   RENICE = 1;
-  THROTTLE = 2;
-  FREEZE = 3;
-  THAW = 4;
-  KILL = 5;
+  SET_CPU_WEIGHT = 2;
+  SET_CPU_MAX = 3;
+  SET_MEM_HIGH = 4;
+  SET_MEM_MAX = 5;
+  FREEZE = 6;
+  THAW = 7;
+  KILL = 8;
 }
 
 enum RiskLevel {
   RISK_LEVEL_UNSPECIFIED = 0;
-  LOW = 1;
-  MED = 2;
-  HIGH = 3;
+  RISK_LOW = 1;
+  RISK_MED = 2;
+  RISK_HIGH = 3;
 }
 
 enum AgentHealth {
@@ -77,16 +146,30 @@ enum AgentHealth {
   AGENT_HEALTH_DEAD = 3;
 }
 
+enum AgentSignalType {
+  AGENT_SIGNAL_UNSPECIFIED = 0;
+  AGENT_REGISTER = 1;
+  AGENT_HEARTBEAT = 2;
+  AGENT_GOODBYE = 3;
+}
+
+enum BenchStage {
+  BENCH_STAGE_UNSPECIFIED = 0;
+  BENCH_START = 1;
+  BENCH_STOP = 2;
+}
+
 message MessageHeader {
-  MsgType msg_type = 1;
-  string request_id = 2;
-  string trace_id = 3;
-  string conversation_id = 4;
-  int64 deadline_unix_ms = 5;
-  string sender_role = 6;
-  string sender_id = 7;
-  string protocol_version = 8;
-  int64 sent_unix_ms = 9;
+  MessageCategory message_category = 1;
+  MessageKind message_kind = 2;
+  string request_id = 3;
+  string trace_id = 4;
+  string conversation_id = 5;
+  string sender_id = 6;
+  string sender_role = 7;
+  int64 ts_ms = 8;
+  int64 deadline_unix_ms = 9;
+  string protocol_version = 10;
 }
 
 message ResourceRequest {
@@ -108,13 +191,15 @@ message SubmitTask {
 
 message SubmitReply {
   string task_id = 1;
-  SubmitStatus status = 2;
-  string message = 3;
-  string lease_id = 4;
-  int32 pid = 5;
-  int64 submitted_ts_ms = 6;
-  int64 started_ts_ms = 7;
-  int64 finished_ts_ms = 8;
+  string trace_id = 2;
+  SubmitStatus status = 3;
+  string message = 4;
+  string lease_id = 5;
+  string executor_id = 6;
+  int32 pid = 7;
+  int64 submitted_ts_ms = 8;
+  int64 started_ts_ms = 9;
+  int64 finished_ts_ms = 10;
 }
 
 message LeaseReserve {
@@ -131,6 +216,8 @@ message LeaseDecision {
   ResourceRequest budget = 5;
   string reason = 6;
   int64 decision_ts_ms = 7;
+  LeaseState lease_state = 8;
+  LeaseDecisionReasonCode reason_code = 9;
 }
 
 message LeaseCommit {
@@ -144,64 +231,117 @@ message LeaseRelease {
   string reason = 3;
 }
 
-message Placement {
-  string cgroup_path = 1;
-}
-
 message LaunchTask {
   string task_id = 1;
-  string lease_id = 2;
-  string cmd = 3;
-  repeated string args = 4;
-  Placement placement = 5;
-  int32 priority = 6;
-  string task_class = 7;
+  string trace_id = 2;
+  string lease_id = 3;
+  string cmd = 4;
+  repeated string args = 5;
+  string cgroup_path = 6;
+  int32 priority = 7;
+  string task_class = 8;
+  int64 submitted_ts_ms = 9;
+  int64 lease_decision_ts_ms = 10;
 }
 
 message TaskEvent {
   string task_id = 1;
-  string lease_id = 2;
-  TaskEventType event_type = 3;
-  int32 pid = 4;
-  int32 exit_code = 5;
-  int64 ts_ms = 6;
-  string error = 7;
-  int64 submitted_ts_ms = 8;
-  int64 lease_decision_ts_ms = 9;
-  int64 started_ts_ms = 10;
-  string task_class = 11;
+  string trace_id = 2;
+  string lease_id = 3;
+  string executor_id = 4;
+  TaskEventType event_type = 5;
+  int32 pid = 6;
+  int32 exit_code = 7;
+  int64 ts_ms = 8;
+  string error = 9;
+  int64 submitted_ts_ms = 10;
+  int64 lease_decision_ts_ms = 11;
+  int64 started_ts_ms = 12;
+  int64 finished_ts_ms = 13;
+  string task_class = 14;
+  int32 queue_length = 15;
+  string queue_reason = 16;
+  int64 queue_enter_ts_ms = 17;
 }
 
 message ControlAction {
-  ControlActionType action_type = 1;
+  TargetType target_type = 1;
+  string target_id = 2;
+  string task_id = 3;
+  string executor_id = 4;
+  int32 pid = 5;
+  string cgroup_path = 6;
+  ControlActionType action_type = 7;
+  map<string, double> numeric_params = 8;
+  map<string, string> string_params = 9;
+  string reason = 10;
+  string policy_id = 11;
+  int64 ts_ms = 12;
+}
+
+message ActuatorResult {
+  string target_id = 1;
   string task_id = 2;
-  int32 pid = 3;
-  map<string, string> params = 4;
-  string reason = 5;
-  int64 ts_ms = 6;
+  string executor_id = 3;
+  int32 pid = 4;
+  string cgroup_path = 5;
+  ControlActionType action_type = 6;
+  bool success = 7;
+  string reason = 8;
+  int64 ts_ms = 9;
 }
 
-message ControlApplied {
-  string task_id = 1;
-  int32 pid = 2;
-  ControlActionType action_type = 3;
-  bool success = 4;
-  string reason = 5;
-  int64 ts_ms = 6;
-}
-
-message PressureUpdate {
+message PressureState {
   int64 ts_ms = 1;
   double cpu_usage_pct = 2;
   int64 mem_available_mb = 3;
-  RiskLevel risk_level = 4;
+  double load1 = 4;
+  double cpu_pressure_some = 5;
+  double memory_pressure_some = 6;
+  double io_pressure_some = 7;
+  RiskLevel risk_level = 8;
 }
 
-message ForecastUpdate {
+message ForecastState {
   int64 ts_ms = 1;
   double predicted_cpu_usage_pct = 2;
   int64 predicted_mem_available_mb = 3;
   RiskLevel risk_level = 4;
+  string predictor = 5;
+  double overload_probability = 6;
+}
+
+message CapacityState {
+  int64 ts_ms = 1;
+  int32 cpu_millis_total = 2;
+  int32 cpu_millis_allocatable = 3;
+  int64 mem_total_mb = 4;
+  int64 mem_available_mb = 5;
+  int64 mem_allocatable_mb = 6;
+  int32 max_managed_tasks = 7;
+}
+
+message TargetInfo {
+  string target_id = 1;
+  TargetSourceType source_type = 2;
+  string owner_executor_id = 3;
+  string task_id = 4;
+  int32 pid = 5;
+  string cgroup_path = 6;
+  string task_class = 7;
+  int32 priority = 8;
+  bool is_protected = 9;
+  repeated ControlActionType allowed_actions = 10;
+  double cpu_usage = 11;
+  double memory_current_mb = 12;
+  double cpu_pressure = 13;
+  double memory_pressure = 14;
+  double io_pressure = 15;
+}
+
+message TargetsState {
+  int64 ts_ms = 1;
+  repeated TargetInfo targets = 2;
 }
 
 message AgentHeartbeat {
@@ -210,11 +350,12 @@ message AgentHeartbeat {
   repeated string capabilities = 3;
   int32 inflight_tasks = 4;
   AgentHealth health = 5;
-  int64 ts_ms = 6;
-  string protocol_version = 7;
+  AgentSignalType signal_type = 6;
+  int64 ts_ms = 7;
+  string protocol_version = 8;
 }
 
-message AgentInfo {
+message AgentRecord {
   string agent_id = 1;
   string role = 2;
   repeated string capabilities = 3;
@@ -224,62 +365,121 @@ message AgentInfo {
   string protocol_version = 7;
 }
 
-message DirSnapshotRequest {}
+message DirectorySnapshotRequest {}
 
-message DirSnapshot {
-  repeated AgentInfo agents = 1;
+message DirectorySnapshot {
+  repeated AgentRecord agents = 1;
   int32 alive_agents = 2;
   int32 dead_agents = 3;
   int64 ts_ms = 4;
 }
 
-message BenchStart {
+message BenchSession {
   string bench_id = 1;
-  int32 planned = 2;
-  int64 start_ts_ms = 3;
-  map<string, string> tags = 4;
-}
-
-message BenchStop {
-  string bench_id = 1;
-  int32 planned = 2;
-  int64 start_ts_ms = 3;
-  int64 stop_ts_ms = 4;
-  int32 sent = 5;
-  int32 completed = 6;
-  int32 timeouts = 7;
-  map<string, string> tags = 8;
+  BenchStage stage = 2;
+  int32 planned_requests = 3;
+  int32 sent_requests = 4;
+  int32 completed = 5;
+  int32 failed = 6;
+  int32 denied = 7;
+  int32 timeouts = 8;
+  int64 start_ts_ms = 9;
+  int64 stop_ts_ms = 10;
+  map<string, string> tags = 11;
 }
 
 message SystemStatusRequest {}
 
-message SystemStatus {
-  DirSnapshot directory = 1;
-  PressureUpdate pressure = 2;
-  int64 ts_ms = 3;
+message SystemStatusReply {
+  int64 ts_ms = 1;
+  DirectorySnapshot directory = 2;
+  PressureState pressure = 3;
+  ForecastState forecast = 4;
+  CapacityState capacity = 5;
+}
+
+message TaskStatusRequest {
+  string task_id = 1;
+}
+
+message TaskStatusReply {
+  string task_id = 1;
+  string trace_id = 2;
+  string submit_request_id = 3;
+  string current_state = 4;
+  SubmitStatus status = 5;
+  string message = 6;
+  string lease_id = 7;
+  string executor_id = 8;
+  int32 pid = 9;
+  int64 submitted_ts_ms = 10;
+  int64 reserve_requested_ts_ms = 11;
+  int64 reserve_decision_ts_ms = 12;
+  int64 commit_requested_ts_ms = 13;
+  int64 commit_ack_ts_ms = 14;
+  int64 launch_sent_ts_ms = 15;
+  int64 started_ts_ms = 16;
+  int64 finished_ts_ms = 17;
+  int32 exit_code = 18;
+  string error_message = 19;
+  bool queued = 20;
+  int32 queue_position = 21;
+  int64 queue_enter_ts_ms = 22;
+  int64 queue_deadline_ts_ms = 23;
+  int32 queue_attempts = 24;
+  string queued_reason = 25;
+  string last_reserve_failure_reason = 26;
+}
+
+message CommandMessage {
+  oneof payload {
+    SubmitTask submit_task = 1;
+    TaskStatusRequest task_status_request = 2;
+    LeaseReserve lease_reserve = 3;
+    LeaseCommit lease_commit = 4;
+    LeaseRelease lease_release = 5;
+    LaunchTask launch_task = 6;
+    ControlAction control_action = 7;
+    SystemStatusRequest system_status_request = 9;
+  }
+}
+
+message EventMessage {
+  oneof payload {
+    TaskEvent task_event = 1;
+    ActuatorResult actuator_result = 2;
+    LeaseDecision lease_decision = 3;
+  }
+}
+
+message StateMessage {
+  oneof payload {
+    PressureState pressure_state = 1;
+    ForecastState forecast_state = 2;
+    CapacityState capacity_state = 3;
+    TargetsState targets_state = 4;
+  }
+}
+
+message ServiceMessage {
+  oneof payload {
+    AgentHeartbeat agent_heartbeat = 1;
+    DirectorySnapshotRequest directory_snapshot_request = 2;
+    DirectorySnapshot directory_snapshot = 3;
+    SubmitReply submit_reply = 4;
+    TaskStatusReply task_status_reply = 5;
+    SystemStatusReply system_status_reply = 6;
+    BenchSession bench_session = 7;
+    LeaseDecision lease_decision = 8;
+  }
 }
 
 message Envelope {
   MessageHeader header = 1;
   oneof payload {
-    SubmitTask submit_task = 10;
-    SubmitReply submit_reply = 11;
-    LeaseReserve lease_reserve = 12;
-    LeaseDecision lease_decision = 13;
-    LeaseCommit lease_commit = 14;
-    LeaseRelease lease_release = 15;
-    LaunchTask launch_task = 16;
-    TaskEvent task_event = 17;
-    ControlAction control_action = 18;
-    ControlApplied control_applied = 19;
-    PressureUpdate pressure_update = 20;
-    ForecastUpdate forecast_update = 21;
-    AgentHeartbeat agent_heartbeat = 22;
-    DirSnapshotRequest dir_snapshot_request = 23;
-    DirSnapshot dir_snapshot = 24;
-    BenchStart bench_start = 25;
-    BenchStop bench_stop = 26;
-    SystemStatusRequest system_status_request = 27;
-    SystemStatus system_status = 28;
+    CommandMessage command = 10;
+    EventMessage event = 11;
+    StateMessage state = 12;
+    ServiceMessage service = 13;
   }
 }

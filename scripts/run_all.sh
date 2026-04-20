@@ -4,13 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${ROOT_DIR}/build"
 LOG_DIR="${ROOT_DIR}/logs"
+REPORTS_DIR="${ROOT_DIR}/reports"
 NATS_HOST="127.0.0.1"
 NATS_PORT="4222"
 NATS_URL="nats://${NATS_HOST}:${NATS_PORT}"
 EXECUTOR_COUNT="${EXECUTOR_COUNT:-2}"
 AUTO_BUILD="${AUTO_BUILD:-1}"
 
-mkdir -p "${LOG_DIR}"
+mkdir -p "${LOG_DIR}" "${REPORTS_DIR}"
 
 if [[ "${AUTO_BUILD}" == "1" ]]; then
   cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" >/dev/null
@@ -27,7 +28,7 @@ is_nats_up() {
 
 NATS_PID=""
 if ! is_nats_up; then
-  echo "[run_all] nats-server is not running; starting local instance"
+  echo "[run_all] nats-server is not running, starting local instance"
   nats-server -a "${NATS_HOST}" -p "${NATS_PORT}" >"${LOG_DIR}/nats-server.log" 2>&1 &
   NATS_PID=$!
   sleep 0.5
@@ -49,13 +50,13 @@ start_agent() {
     exit 1
   fi
   echo "[run_all] starting ${name}"
-  "${bin}" "$@" >"${LOG_DIR}/${name}.log" 2>&1 &
+  "${bin}" "$@" >"${LOG_DIR}/runtime_${name}.log" 2>&1 &
   PIDS+=("$!")
 }
 
 cleanup() {
   set +e
-  echo "[run_all] stopping agents..."
+  echo "[run_all] stopping agents"
   for pid in "${PIDS[@]:-}"; do
     kill "${pid}" 2>/dev/null || true
   done
@@ -68,16 +69,17 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 start_agent directory_agent --nats "${NATS_URL}"
-start_agent system_monitor --nats "${NATS_URL}" --interval-ms 500
-start_agent lease_authority --nats "${NATS_URL}" --mem-factor 0.8
+start_agent lease_authority_agent --nats "${NATS_URL}"
+start_agent system_monitor_agent --nats "${NATS_URL}" --interval-ms 500
+start_agent actuator_agent --nats "${NATS_URL}"
+start_agent planner_agent --nats "${NATS_URL}"
 
 for i in $(seq 1 "${EXECUTOR_COUNT}"); do
-  start_agent executor_agent --nats "${NATS_URL}" --id "${i}"
+  start_agent task_executor_agent --nats "${NATS_URL}" --executor-id "exec-${i}"
 done
 
-start_agent planner_agent --nats "${NATS_URL}"
-start_agent task_manager --nats "${NATS_URL}"
-start_agent metrics_collector --nats "${NATS_URL}" --report-file "${ROOT_DIR}/derived/metrics_report.txt"
+start_agent task_manager_agent --nats "${NATS_URL}"
+start_agent metrics_collector_agent --nats "${NATS_URL}" --reports-root "${REPORTS_DIR}"
 
-echo "[run_all] all agents are running (logs in ${LOG_DIR})"
+echo "[run_all] all agents are running"
 wait

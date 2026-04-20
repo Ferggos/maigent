@@ -24,20 +24,20 @@ class NatsClient {
   NatsClient();
   ~NatsClient();
 
-  bool Connect(const std::string& url, const std::string& name = "");
+  bool Connect(const std::string& url, const std::string& client_name = "");
 
   bool Publish(const std::string& subject, const std::string& data);
-  bool PublishEnvelope(const std::string& subject, const maigent::Envelope& env);
+  bool PublishEnvelope(const std::string& subject, const Envelope& env);
 
-  bool RequestEnvelope(const std::string& subject, const maigent::Envelope& req,
-                       int timeout_ms, maigent::Envelope* reply,
+  bool RequestEnvelope(const std::string& subject, const Envelope& request,
+                       int timeout_ms, Envelope* reply,
                        std::string* error = nullptr);
 
-  bool Subscribe(const std::string& subject, NatsCallback cb);
+  bool Subscribe(const std::string& subject, NatsCallback callback);
   bool QueueSubscribe(const std::string& subject, const std::string& queue,
-                      NatsCallback cb);
+                      NatsCallback callback);
 
-  bool RespondEnvelope(const NatsMessage& incoming, const maigent::Envelope& env);
+  bool RespondEnvelope(const NatsMessage& incoming, const Envelope& reply);
 
   void Flush(int timeout_ms = 1000);
 
@@ -50,7 +50,7 @@ class NatsClient {
                         void* closure);
 
   bool SubscribeImpl(const std::string& subject, const std::string& queue,
-                     NatsCallback cb);
+                     NatsCallback callback);
   void Close();
 
   natsConnection* nc_;

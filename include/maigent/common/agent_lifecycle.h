@@ -6,8 +6,7 @@
 #include <thread>
 #include <vector>
 
-#include "maigent.pb.h"
-#include "maigent/nats_wrapper.h"
+#include "maigent/common/nats_wrapper.h"
 
 namespace maigent {
 
@@ -22,7 +21,8 @@ class AgentLifecycle {
   void Stop(bool publish_goodbye = true);
 
  private:
-  void Publish(const std::string& subject, maigent::AgentHealth health);
+  void Publish(const std::string& subject, AgentSignalType signal_type,
+               AgentHealth health);
 
   NatsClient* nats_;
   std::string role_;

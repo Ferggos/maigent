@@ -323,7 +323,8 @@ int main(int argc, char** argv) {
 
     {
       std::lock_guard<std::mutex> lock(mu);
-      pressure_history.push_back(maigent::ToPressureHistorySample(model_output.pressure));
+      pressure_history.push_back(
+          maigent::ToPressureHistorySampleFromOutput(model_output.pressure));
       if (pressure_history.size() > 128) {
         pressure_history.erase(pressure_history.begin());
       }

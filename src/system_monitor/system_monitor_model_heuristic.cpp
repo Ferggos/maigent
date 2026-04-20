@@ -26,7 +26,8 @@ TargetInfo ToProtoTargetInfo(const SystemMonitorTargetInput& in) {
   return out;
 }
 
-PressureState ToProtoPressureHistorySample(const SystemMonitorPressureHistorySample& sample) {
+PressureState ToProtoPressureStateFromHistorySample(
+    const SystemMonitorPressureHistorySample& sample) {
   PressureState out;
   out.set_ts_ms(sample.ts_ms);
   out.set_cpu_usage_pct(sample.cpu_usage_pct);
@@ -59,14 +60,15 @@ SystemMonitorModelOutput HeuristicSystemMonitorModel::Evaluate(
   }
 
   const PressureState latest_pressure = ToProtoPressureState(out.pressure);
-  std::vector<PressureState> history;
-  history.reserve(input.pressure_history.size() + 1);
+  std::vector<PressureState> pressure_history_states;
+  pressure_history_states.reserve(input.pressure_history.size() + 1);
   for (const auto& sample : input.pressure_history) {
-    history.push_back(ToProtoPressureHistorySample(sample));
+    pressure_history_states.push_back(ToProtoPressureStateFromHistorySample(sample));
   }
-  history.push_back(latest_pressure);
+  pressure_history_states.push_back(latest_pressure);
 
-  const ForecastState forecast = predictor_.Predict(latest_pressure, history);
+  const ForecastState forecast =
+      predictor_.Predict(latest_pressure, pressure_history_states);
   out.forecast.ts_ms = forecast.ts_ms();
   out.forecast.predicted_cpu_usage_pct = forecast.predicted_cpu_usage_pct();
   out.forecast.predicted_mem_available_mb = forecast.predicted_mem_available_mb();

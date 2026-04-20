@@ -108,7 +108,7 @@ PressureState ToProtoPressureState(const SystemMonitorPressureOutput& pressure);
 ForecastState ToProtoForecastState(const SystemMonitorForecastOutput& forecast);
 CapacityState ToProtoCapacityState(const SystemMonitorCapacityOutput& capacity);
 TargetsState ToProtoTargetsState(const SystemMonitorModelOutput& output);
-SystemMonitorPressureHistorySample ToPressureHistorySample(
+SystemMonitorPressureHistorySample ToPressureHistorySampleFromOutput(
     const SystemMonitorPressureOutput& pressure);
 
 }  // namespace maigent

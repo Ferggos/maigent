@@ -64,7 +64,7 @@ TargetsState ToProtoTargetsState(const SystemMonitorModelOutput& output) {
   return out;
 }
 
-SystemMonitorPressureHistorySample ToPressureHistorySample(
+SystemMonitorPressureHistorySample ToPressureHistorySampleFromOutput(
     const SystemMonitorPressureOutput& pressure) {
   SystemMonitorPressureHistorySample out;
   out.ts_ms = pressure.ts_ms;

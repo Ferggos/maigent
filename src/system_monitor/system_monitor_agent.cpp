@@ -19,8 +19,7 @@
 #include "maigent/common/logging.h"
 #include "maigent/common/message_helpers.h"
 #include "maigent/common/nats_wrapper.h"
-#include "maigent/system_monitor/predictor.h"
-#include "maigent/system_monitor/target_classifier.h"
+#include "maigent/system_monitor/system_monitor_model.h"
 #include "state_collector.h"
 
 namespace {
@@ -166,12 +165,11 @@ int main(int argc, char** argv) {
   }
 
   maigent::StateCollector state_collector;
-  maigent::HeuristicPredictor predictor;
-  maigent::HeuristicTargetClassifier classifier;
+  maigent::HeuristicSystemMonitorModel model;
 
   std::mutex mu;
   std::unordered_map<std::string, ManagedTaskRef> managed_tasks;
-  std::vector<maigent::PressureState> pressure_history;
+  std::vector<maigent::SystemMonitorPressureHistorySample> pressure_history;
   pressure_history.reserve(64);
 
   auto on_task_event = [&](const maigent::NatsMessage& msg) {
@@ -210,10 +208,8 @@ int main(int argc, char** argv) {
   nats.Subscribe(maigent::kSubjectEvtTaskFinished, on_task_event);
   nats.Subscribe(maigent::kSubjectEvtTaskFailed, on_task_event);
 
-  auto build_targets = [&](int64_t now_ms) {
-    maigent::TargetsState targets;
-    targets.set_ts_ms(now_ms);
-
+  auto build_targets = [&]() {
+    std::vector<maigent::SystemMonitorTargetInput> targets;
     std::vector<ManagedTaskRef> local_tasks;
     {
       std::lock_guard<std::mutex> lock(mu);
@@ -223,73 +219,73 @@ int main(int argc, char** argv) {
       }
     }
 
+    targets.reserve(local_tasks.size() + 2);
     for (const auto& task : local_tasks) {
-      auto* t = targets.add_targets();
-      t->set_target_id("managed:" + task.task_id);
-      t->set_source_type(maigent::MANAGED_TASK);
-      t->set_owner_executor_id(task.executor_id);
-      t->set_task_id(task.task_id);
-      t->set_pid(task.pid);
-      t->set_cgroup_path(task.cgroup_path);
-      t->set_task_class(task.task_class);
-      t->set_priority(task.priority);
+      maigent::SystemMonitorTargetInput t;
+      t.target_id = "managed:" + task.task_id;
+      t.source_type = maigent::MANAGED_TASK;
+      t.owner_executor_id = task.executor_id;
+      t.task_id = task.task_id;
+      t.pid = task.pid;
+      t.cgroup_path = task.cgroup_path;
+      t.task_class = task.task_class;
+      t.priority = task.priority;
 
       const int64_t rss_mb = ReadVmRssMb(task.pid);
-      t->set_memory_current_mb(static_cast<double>(rss_mb));
+      t.memory_current_mb = static_cast<double>(rss_mb);
 
       if (!task.cgroup_path.empty()) {
         const std::filesystem::path cg = std::filesystem::path(cgroup_root) / task.cgroup_path;
-        t->set_cpu_usage(ReadCpuStatUsageHint(cg / "cpu.stat"));
+        t.cpu_usage = ReadCpuStatUsageHint(cg / "cpu.stat");
         const int64_t mem_events = ReadMemoryEventsTotal(cg / "memory.events");
         const int64_t io_lines = ReadIoStatLines(cg / "io.stat");
-        t->set_cpu_pressure(ParsePressureAvg10(cg / "cpu.pressure"));
-        t->set_memory_pressure(ParsePressureAvg10(cg / "memory.pressure"));
-        t->set_io_pressure(ParsePressureAvg10(cg / "io.pressure"));
+        t.cpu_pressure = ParsePressureAvg10(cg / "cpu.pressure");
+        t.memory_pressure = ParsePressureAvg10(cg / "memory.pressure");
+        t.io_pressure = ParsePressureAvg10(cg / "io.pressure");
         if (mem_events > 0) {
-          t->set_memory_pressure(std::max(t->memory_pressure(), 0.1));
+          t.memory_pressure = std::max(t.memory_pressure, 0.1);
         }
         if (io_lines > 0) {
-          t->set_io_pressure(std::max(t->io_pressure(), 0.1));
+          t.io_pressure = std::max(t.io_pressure, 0.1);
         }
       }
-
-      classifier.Classify(t);
+      targets.push_back(std::move(t));
     }
 
     {
-      auto* ext_group = targets.add_targets();
-      ext_group->set_target_id("external_group:system.slice");
-      ext_group->set_source_type(maigent::EXTERNAL_GROUP);
-      ext_group->set_cgroup_path("system.slice");
-      ext_group->set_task_class("external");
-      ext_group->set_priority(0);
+      maigent::SystemMonitorTargetInput ext_group;
+      ext_group.target_id = "external_group:system.slice";
+      ext_group.source_type = maigent::EXTERNAL_GROUP;
+      ext_group.cgroup_path = "system.slice";
+      ext_group.task_class = "external";
+      ext_group.priority = 0;
       const std::filesystem::path cg = std::filesystem::path(cgroup_root) / "system.slice";
-      ext_group->set_memory_current_mb(
-          static_cast<double>(ReadIntFile(cg / "memory.current")) / (1024.0 * 1024.0));
-      ext_group->set_cpu_usage(ReadCpuStatUsageHint(cg / "cpu.stat"));
+      ext_group.memory_current_mb =
+          static_cast<double>(ReadIntFile(cg / "memory.current")) / (1024.0 * 1024.0);
+      ext_group.cpu_usage = ReadCpuStatUsageHint(cg / "cpu.stat");
       const int64_t mem_events = ReadMemoryEventsTotal(cg / "memory.events");
       const int64_t io_lines = ReadIoStatLines(cg / "io.stat");
-      ext_group->set_cpu_pressure(ParsePressureAvg10(cg / "cpu.pressure"));
-      ext_group->set_memory_pressure(ParsePressureAvg10(cg / "memory.pressure"));
-      ext_group->set_io_pressure(ParsePressureAvg10(cg / "io.pressure"));
+      ext_group.cpu_pressure = ParsePressureAvg10(cg / "cpu.pressure");
+      ext_group.memory_pressure = ParsePressureAvg10(cg / "memory.pressure");
+      ext_group.io_pressure = ParsePressureAvg10(cg / "io.pressure");
       if (mem_events > 0) {
-        ext_group->set_memory_pressure(std::max(ext_group->memory_pressure(), 0.1));
+        ext_group.memory_pressure = std::max(ext_group.memory_pressure, 0.1);
       }
       if (io_lines > 0) {
-        ext_group->set_io_pressure(std::max(ext_group->io_pressure(), 0.1));
+        ext_group.io_pressure = std::max(ext_group.io_pressure, 0.1);
       }
-      classifier.Classify(ext_group);
+      targets.push_back(std::move(ext_group));
     }
 
     {
-      auto* sys_target = targets.add_targets();
-      sys_target->set_target_id("system_service:pid1");
-      sys_target->set_source_type(maigent::SYSTEM_SERVICE);
-      sys_target->set_pid(1);
-      sys_target->set_task_class("system");
-      sys_target->set_priority(100);
-      sys_target->set_memory_current_mb(static_cast<double>(ReadVmRssMb(1)));
-      classifier.Classify(sys_target);
+      maigent::SystemMonitorTargetInput sys_target;
+      sys_target.target_id = "system_service:pid1";
+      sys_target.source_type = maigent::SYSTEM_SERVICE;
+      sys_target.pid = 1;
+      sys_target.task_class = "system";
+      sys_target.priority = 100;
+      sys_target.memory_current_mb = static_cast<double>(ReadVmRssMb(1));
+      targets.push_back(std::move(sys_target));
     }
 
     return targets;
@@ -307,54 +303,36 @@ int main(int argc, char** argv) {
     maigent::RawSystemState raw;
     state_collector.Sample(&raw);
 
-    maigent::PressureState pressure;
-    pressure.set_ts_ms(raw.ts_ms);
-    pressure.set_cpu_usage_pct(raw.cpu_usage_pct);
-    pressure.set_mem_available_mb(raw.mem_available_mb);
-    pressure.set_load1(raw.load1);
-    pressure.set_cpu_pressure_some(raw.psi_cpu_some);
-    pressure.set_memory_pressure_some(raw.psi_mem_some);
-    pressure.set_io_pressure_some(raw.psi_io_some);
-
-    maigent::RiskLevel risk = maigent::RISK_LOW;
-    if (raw.cpu_usage_pct >= 85.0 || raw.mem_available_mb < 768 || raw.psi_mem_some > 1.0) {
-      risk = maigent::RISK_HIGH;
-    } else if (raw.cpu_usage_pct >= 70.0 || raw.mem_available_mb < 1536 ||
-               raw.psi_mem_some > 0.3) {
-      risk = maigent::RISK_MED;
-    }
-    pressure.set_risk_level(risk);
+    maigent::SystemMonitorModelInput model_input;
+    model_input.host.ts_ms = raw.ts_ms;
+    model_input.host.cpu_usage_pct = raw.cpu_usage_pct;
+    model_input.host.mem_total_mb = raw.mem_total_mb;
+    model_input.host.mem_available_mb = raw.mem_available_mb;
+    model_input.host.load1 = raw.load1;
+    model_input.host.psi_cpu_some = raw.psi_cpu_some;
+    model_input.host.psi_mem_some = raw.psi_mem_some;
+    model_input.host.psi_io_some = raw.psi_io_some;
+    model_input.targets = build_targets();
 
     {
       std::lock_guard<std::mutex> lock(mu);
-      pressure_history.push_back(pressure);
+      model_input.pressure_history = pressure_history;
+    }
+
+    const maigent::SystemMonitorModelOutput model_output = model.Evaluate(model_input);
+
+    {
+      std::lock_guard<std::mutex> lock(mu);
+      pressure_history.push_back(maigent::ToPressureHistorySample(model_output.pressure));
       if (pressure_history.size() > 128) {
         pressure_history.erase(pressure_history.begin());
       }
     }
 
-    maigent::ForecastState forecast;
-    {
-      std::vector<maigent::PressureState> history;
-      {
-        std::lock_guard<std::mutex> lock(mu);
-        history = pressure_history;
-      }
-      forecast = predictor.Predict(pressure, history);
-    }
-
-    maigent::CapacityState capacity;
-    capacity.set_ts_ms(raw.ts_ms);
-    const int cpu_total = static_cast<int>(std::thread::hardware_concurrency() * 1000);
-    capacity.set_cpu_millis_total(cpu_total > 0 ? cpu_total : 4000);
-    capacity.set_cpu_millis_allocatable(static_cast<int>(capacity.cpu_millis_total() * 0.85));
-    capacity.set_mem_total_mb(raw.mem_total_mb);
-    capacity.set_mem_available_mb(raw.mem_available_mb);
-    capacity.set_mem_allocatable_mb(
-        static_cast<int64_t>(static_cast<double>(raw.mem_total_mb) * 0.8));
-    capacity.set_max_managed_tasks(std::max(4, capacity.cpu_millis_total() / 750));
-
-    const maigent::TargetsState targets = build_targets(raw.ts_ms);
+    const maigent::PressureState pressure = maigent::ToProtoPressureState(model_output.pressure);
+    const maigent::ForecastState forecast = maigent::ToProtoForecastState(model_output.forecast);
+    const maigent::CapacityState capacity = maigent::ToProtoCapacityState(model_output.capacity);
+    const maigent::TargetsState targets = maigent::ToProtoTargetsState(model_output);
 
     {
       maigent::Envelope env;

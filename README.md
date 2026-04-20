@@ -22,6 +22,14 @@
 - `bench_submitter`
 - `system_status_client`
 
+## System Monitor Model Contract
+
+Внутри `system_monitor_agent` введён стабильный internal model-layer contract:
+- `SystemMonitorModelInput` (host snapshot + target snapshots + pressure history)
+- `SystemMonitorModelOutput` (pressure/forecast/capacity/targets model result)
+
+Наружные runtime публикации остаются прежними: `PressureState`, `ForecastState`, `CapacityState`, `TargetsState`.
+
 ## Build
 
 ```bash

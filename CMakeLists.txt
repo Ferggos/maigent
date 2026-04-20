@@ -68,7 +68,9 @@ target_compile_features(ma_common PUBLIC cxx_std_20)
 
 add_library(system_monitor_core STATIC
   src/system_monitor/state_collector.cpp
+  src/system_monitor/model_contract.cpp
   src/system_monitor/predictor_heuristic.cpp
+  src/system_monitor/system_monitor_model_heuristic.cpp
   src/system_monitor/target_classifier_heuristic.cpp
 )
 target_link_libraries(system_monitor_core PUBLIC ma_common)

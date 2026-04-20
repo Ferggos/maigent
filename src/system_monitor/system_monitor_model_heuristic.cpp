@@ -4,36 +4,88 @@
 #include <thread>
 #include <vector>
 
+#include "maigent/common/time_utils.h"
+
 namespace maigent {
 
 namespace {
 
-TargetInfo ToProtoTargetInfo(const SystemMonitorTargetInput& in) {
-  TargetInfo out;
-  out.set_target_id(in.target_id);
-  out.set_source_type(in.source_type);
-  out.set_owner_executor_id(in.owner_executor_id);
-  out.set_task_id(in.task_id);
-  out.set_pid(in.pid);
-  out.set_cgroup_path(in.cgroup_path);
-  out.set_task_class(in.task_class);
-  out.set_priority(in.priority);
-  out.set_cpu_usage(in.cpu_usage);
-  out.set_memory_current_mb(in.memory_current_mb);
-  out.set_cpu_pressure(in.cpu_pressure);
-  out.set_memory_pressure(in.memory_pressure);
-  out.set_io_pressure(in.io_pressure);
+SystemMonitorForecastOutput PredictForecastHeuristic(
+    const SystemMonitorPressureOutput& latest,
+    const std::vector<SystemMonitorPressureHistorySample>& pressure_history) {
+  std::vector<SystemMonitorPressureHistorySample> history_with_latest =
+      pressure_history;
+  history_with_latest.push_back(ToPressureHistorySampleFromOutput(latest));
+
+  double cpu_sum = latest.cpu_usage_pct;
+  double mem_sum = static_cast<double>(latest.mem_available_mb);
+  int n = 1;
+  for (auto it = history_with_latest.rbegin();
+       it != history_with_latest.rend() && n < 6; ++it) {
+    cpu_sum += it->cpu_usage_pct;
+    mem_sum += static_cast<double>(it->mem_available_mb);
+    ++n;
+  }
+
+  const double cpu_avg = cpu_sum / static_cast<double>(n);
+  const int64_t mem_avg = static_cast<int64_t>(mem_sum / static_cast<double>(n));
+
+  SystemMonitorForecastOutput out;
+  out.ts_ms = NowMs();
+  out.predicted_cpu_usage_pct = std::min(100.0, cpu_avg * 1.08);
+  out.predicted_mem_available_mb = std::max<int64_t>(0, mem_avg - 64);
+  out.predictor = "heuristic_v1";
+
+  if (out.predicted_cpu_usage_pct >= 85.0 || out.predicted_mem_available_mb < 768) {
+    out.risk_level = RISK_HIGH;
+    out.overload_probability = 0.85;
+  } else if (out.predicted_cpu_usage_pct >= 70.0 ||
+             out.predicted_mem_available_mb < 1536) {
+    out.risk_level = RISK_MED;
+    out.overload_probability = 0.45;
+  } else {
+    out.risk_level = RISK_LOW;
+    out.overload_probability = 0.15;
+  }
+
   return out;
 }
 
-PressureState ToProtoPressureStateFromHistorySample(
-    const SystemMonitorPressureHistorySample& sample) {
-  PressureState out;
-  out.set_ts_ms(sample.ts_ms);
-  out.set_cpu_usage_pct(sample.cpu_usage_pct);
-  out.set_mem_available_mb(sample.mem_available_mb);
-  out.set_risk_level(sample.risk_level);
-  return out;
+void ClassifyTargetHeuristic(SystemMonitorTargetOutput* target) {
+  if (target == nullptr) {
+    return;
+  }
+
+  target->allowed_actions.clear();
+  const auto source = target->source_type;
+  if (source == MANAGED_TASK) {
+    target->is_protected = false;
+    target->allowed_actions.push_back(RENICE);
+    target->allowed_actions.push_back(SET_CPU_WEIGHT);
+    target->allowed_actions.push_back(SET_CPU_MAX);
+    target->allowed_actions.push_back(SET_MEM_HIGH);
+    target->allowed_actions.push_back(FREEZE);
+    target->allowed_actions.push_back(THAW);
+    target->allowed_actions.push_back(KILL);
+    return;
+  }
+
+  if (source == EXTERNAL_PROCESS || source == EXTERNAL_GROUP) {
+    target->is_protected = false;
+    target->allowed_actions.push_back(RENICE);
+    target->allowed_actions.push_back(SET_CPU_WEIGHT);
+    target->allowed_actions.push_back(SET_CPU_MAX);
+    target->allowed_actions.push_back(SET_MEM_HIGH);
+    target->allowed_actions.push_back(SET_MEM_MAX);
+    target->allowed_actions.push_back(FREEZE);
+    target->allowed_actions.push_back(THAW);
+    target->allowed_actions.push_back(KILL);
+    return;
+  }
+
+  target->is_protected = true;
+  target->allowed_actions.push_back(RENICE);
+  target->allowed_actions.push_back(SET_CPU_WEIGHT);
 }
 
 }  // namespace
@@ -59,22 +111,7 @@ SystemMonitorModelOutput HeuristicSystemMonitorModel::Evaluate(
     out.pressure.risk_level = RISK_LOW;
   }
 
-  const PressureState latest_pressure = ToProtoPressureState(out.pressure);
-  std::vector<PressureState> pressure_history_states;
-  pressure_history_states.reserve(input.pressure_history.size() + 1);
-  for (const auto& sample : input.pressure_history) {
-    pressure_history_states.push_back(ToProtoPressureStateFromHistorySample(sample));
-  }
-  pressure_history_states.push_back(latest_pressure);
-
-  const ForecastState forecast =
-      predictor_.Predict(latest_pressure, pressure_history_states);
-  out.forecast.ts_ms = forecast.ts_ms();
-  out.forecast.predicted_cpu_usage_pct = forecast.predicted_cpu_usage_pct();
-  out.forecast.predicted_mem_available_mb = forecast.predicted_mem_available_mb();
-  out.forecast.risk_level = forecast.risk_level();
-  out.forecast.predictor = forecast.predictor();
-  out.forecast.overload_probability = forecast.overload_probability();
+  out.forecast = PredictForecastHeuristic(out.pressure, input.pressure_history);
 
   out.capacity.ts_ms = input.host.ts_ms;
   const int cpu_total = static_cast<int>(std::thread::hardware_concurrency() * 1000);
@@ -104,15 +141,7 @@ SystemMonitorModelOutput HeuristicSystemMonitorModel::Evaluate(
     target_out.cpu_pressure = target_in.cpu_pressure;
     target_out.memory_pressure = target_in.memory_pressure;
     target_out.io_pressure = target_in.io_pressure;
-
-    TargetInfo proto_target = ToProtoTargetInfo(target_in);
-    classifier_.Classify(&proto_target);
-    target_out.is_protected = proto_target.is_protected();
-    target_out.allowed_actions.reserve(proto_target.allowed_actions_size());
-    for (int i = 0; i < proto_target.allowed_actions_size(); ++i) {
-      target_out.allowed_actions.push_back(proto_target.allowed_actions(i));
-    }
-
+    ClassifyTargetHeuristic(&target_out);
     out.targets.push_back(std::move(target_out));
   }
 

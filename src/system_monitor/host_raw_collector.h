@@ -4,7 +4,7 @@
 
 namespace maigent {
 
-struct RawSystemState {
+struct HostRawState {
   int64_t ts_ms = 0;
   double cpu_usage_pct = 0.0;
   int64_t mem_total_mb = 0;
@@ -15,11 +15,11 @@ struct RawSystemState {
   double psi_io_some = 0.0;
 };
 
-class StateCollector {
+class HostRawCollector {
  public:
-  StateCollector();
+  HostRawCollector();
 
-  bool Sample(RawSystemState* out);
+  bool Sample(HostRawState* out);
 
  private:
   bool ReadCpuSample(uint64_t* idle_out, uint64_t* total_out) const;

@@ -22,21 +22,6 @@
 - `bench_submitter`
 - `system_status_client`
 
-## System Monitor Model Contract
-
-Внутри `system_monitor_agent` введён стабильный internal model-layer contract:
-- `SystemMonitorModelInput` (host snapshot + target snapshots + pressure history)
-- `SystemMonitorModelOutput` (pressure/forecast/capacity/targets model result)
-
-Наружные runtime публикации остаются прежними: `PressureState`, `ForecastState`, `CapacityState`, `TargetsState`.
-
-## Planner Model Contract
-
-Внутри `planner_agent` введён стабильный internal decision-model contract:
-- `PlannerModelInput` (snapshot pressure/forecast/capacity/targets + local planner context)
-- `PlannerModelOutput` (ordered decision actions до runtime-mapping)
-
-Runtime-контур сохранён: planner по-прежнему потребляет существующие state messages и публикует существующие `ControlAction`.
 
 ## Build
 

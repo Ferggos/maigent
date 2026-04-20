@@ -1,4 +1,4 @@
-#include "state_collector.h"
+#include "host_raw_collector.h"
 
 #include <fstream>
 #include <sstream>
@@ -8,9 +8,10 @@
 
 namespace maigent {
 
-StateCollector::StateCollector() : prev_idle_(0), prev_total_(0), have_prev_cpu_(false) {}
+HostRawCollector::HostRawCollector()
+    : prev_idle_(0), prev_total_(0), have_prev_cpu_(false) {}
 
-bool StateCollector::Sample(RawSystemState* out) {
+bool HostRawCollector::Sample(HostRawState* out) {
   out->ts_ms = NowMs();
 
   uint64_t idle = 0;
@@ -38,7 +39,7 @@ bool StateCollector::Sample(RawSystemState* out) {
   return true;
 }
 
-bool StateCollector::ReadCpuSample(uint64_t* idle_out, uint64_t* total_out) const {
+bool HostRawCollector::ReadCpuSample(uint64_t* idle_out, uint64_t* total_out) const {
   std::ifstream in("/proc/stat");
   if (!in.is_open()) {
     return false;
@@ -68,7 +69,7 @@ bool StateCollector::ReadCpuSample(uint64_t* idle_out, uint64_t* total_out) cons
   return true;
 }
 
-int64_t StateCollector::ReadMemInfoMb(const char* key) const {
+int64_t HostRawCollector::ReadMemInfoMb(const char* key) const {
   std::ifstream in("/proc/meminfo");
   if (!in.is_open()) {
     return 0;
@@ -85,7 +86,7 @@ int64_t StateCollector::ReadMemInfoMb(const char* key) const {
   return 0;
 }
 
-double StateCollector::ReadLoadAvg() const {
+double HostRawCollector::ReadLoadAvg() const {
   std::ifstream in("/proc/loadavg");
   if (!in.is_open()) {
     return 0.0;
@@ -95,7 +96,7 @@ double StateCollector::ReadLoadAvg() const {
   return load1;
 }
 
-double StateCollector::ReadPressureAvg10(const char* path) const {
+double HostRawCollector::ReadPressureAvg10(const char* path) const {
   std::ifstream in(path);
   if (!in.is_open()) {
     return 0.0;

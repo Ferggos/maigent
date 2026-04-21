@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "maigent/common/target_model_proto.h"
+
 namespace maigent {
 
 HeuristicPlannerModel::HeuristicPlannerModel(int max_actions_per_tick)
@@ -20,8 +22,8 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
     return out;
   }
 
-  std::vector<const PlannerTargetInput*> managed;
-  std::vector<const PlannerTargetInput*> external;
+  std::vector<const UnifiedTarget*> managed;
+  std::vector<const UnifiedTarget*> external;
   managed.reserve(input.targets.size());
   external.reserve(input.targets.size());
 
@@ -29,7 +31,7 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
     if (target.is_protected) {
       continue;
     }
-    if (target.source_type == MANAGED_TASK) {
+    if (target.source == TargetSource::kManagedTask) {
       managed.push_back(&target);
     } else {
       external.push_back(&target);
@@ -37,22 +39,25 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
   }
 
   std::sort(managed.begin(), managed.end(),
-            [](const PlannerTargetInput* a, const PlannerTargetInput* b) {
+            [](const UnifiedTarget* a, const UnifiedTarget* b) {
               return a->memory_current_mb > b->memory_current_mb;
             });
   std::sort(external.begin(), external.end(),
-            [](const PlannerTargetInput* a, const PlannerTargetInput* b) {
+            [](const UnifiedTarget* a, const UnifiedTarget* b) {
               return a->memory_current_mb > b->memory_current_mb;
             });
 
   out.actions.reserve(static_cast<size_t>(max_actions_per_tick_));
-  for (const PlannerTargetInput* target : managed) {
+  for (const UnifiedTarget* target : managed) {
     if (static_cast<int>(out.actions.size()) >= max_actions_per_tick_) {
       break;
     }
 
     PlannerDecisionAction action;
-    action.target_type = TARGET_TASK;
+    action.target_type = ToProtoTargetType(target->kind);
+    if (action.target_type == TARGET_TYPE_UNSPECIFIED) {
+      action.target_type = TARGET_TASK;
+    }
     action.target_id = target->target_id;
     action.task_id = target->task_id;
     action.executor_id = target->owner_executor_id;
@@ -66,13 +71,17 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
     out.actions.push_back(std::move(action));
   }
 
-  for (const PlannerTargetInput* target : external) {
+  for (const UnifiedTarget* target : external) {
     if (static_cast<int>(out.actions.size()) >= max_actions_per_tick_) {
       break;
     }
 
     PlannerDecisionAction action;
-    action.target_type = target->cgroup_path.empty() ? TARGET_PROCESS : TARGET_CGROUP;
+    action.target_type = ToProtoTargetType(target->kind);
+    if (action.target_type == TARGET_TYPE_UNSPECIFIED) {
+      action.target_type = target->cgroup_path.empty() ? TARGET_PROCESS
+                                                       : TARGET_CGROUP;
+    }
     action.target_id = target->target_id;
     action.task_id = target->task_id;
     action.executor_id = target->owner_executor_id;

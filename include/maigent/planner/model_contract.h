@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "maigent/common/target_model.h"
 #include "maigent.pb.h"
 
 namespace maigent {
@@ -39,30 +40,12 @@ struct PlannerCapacityInput {
   int max_managed_tasks = 0;
 };
 
-struct PlannerTargetInput {
-  std::string target_id;
-  TargetSourceType source_type = TARGET_SOURCE_UNSPECIFIED;
-  std::string owner_executor_id;
-  std::string task_id;
-  int pid = 0;
-  std::string cgroup_path;
-  std::string task_class;
-  int priority = 0;
-  bool is_protected = false;
-  std::vector<ControlActionType> allowed_actions;
-  double cpu_usage = 0.0;
-  double memory_current_mb = 0.0;
-  double cpu_pressure = 0.0;
-  double memory_pressure = 0.0;
-  double io_pressure = 0.0;
-};
-
 struct PlannerModelInput {
   int64_t snapshot_ts_ms = 0;
   PlannerPressureInput pressure;
   PlannerForecastInput forecast;
   PlannerCapacityInput capacity;
-  std::vector<PlannerTargetInput> targets;
+  std::vector<UnifiedTarget> targets;
   int active_tasks = 0;
 };
 

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "maigent/common/target_model.h"
 #include "maigent.pb.h"
 
 namespace maigent {
@@ -19,22 +20,6 @@ struct SystemMonitorHostInput {
   double psi_io_some = 0.0;
 };
 
-struct SystemMonitorTargetInput {
-  std::string target_id;
-  TargetSourceType source_type = TARGET_SOURCE_UNSPECIFIED;
-  std::string owner_executor_id;
-  std::string task_id;
-  int pid = 0;
-  std::string cgroup_path;
-  std::string task_class;
-  int priority = 0;
-  double cpu_usage = 0.0;
-  double memory_current_mb = 0.0;
-  double cpu_pressure = 0.0;
-  double memory_pressure = 0.0;
-  double io_pressure = 0.0;
-};
-
 struct SystemMonitorPressureHistorySample {
   int64_t ts_ms = 0;
   double cpu_usage_pct = 0.0;
@@ -44,7 +29,7 @@ struct SystemMonitorPressureHistorySample {
 
 struct SystemMonitorModelInput {
   SystemMonitorHostInput host;
-  std::vector<SystemMonitorTargetInput> targets;
+  std::vector<UnifiedTarget> targets;
   std::vector<SystemMonitorPressureHistorySample> pressure_history;
 };
 
@@ -78,30 +63,12 @@ struct SystemMonitorCapacityOutput {
   int max_managed_tasks = 0;
 };
 
-struct SystemMonitorTargetOutput {
-  std::string target_id;
-  TargetSourceType source_type = TARGET_SOURCE_UNSPECIFIED;
-  std::string owner_executor_id;
-  std::string task_id;
-  int pid = 0;
-  std::string cgroup_path;
-  std::string task_class;
-  int priority = 0;
-  bool is_protected = false;
-  std::vector<ControlActionType> allowed_actions;
-  double cpu_usage = 0.0;
-  double memory_current_mb = 0.0;
-  double cpu_pressure = 0.0;
-  double memory_pressure = 0.0;
-  double io_pressure = 0.0;
-};
-
 struct SystemMonitorModelOutput {
   SystemMonitorPressureOutput pressure;
   SystemMonitorForecastOutput forecast;
   SystemMonitorCapacityOutput capacity;
   int64_t targets_ts_ms = 0;
-  std::vector<SystemMonitorTargetOutput> targets;
+  std::vector<UnifiedTarget> targets;
 };
 
 PressureState ToProtoPressureState(const SystemMonitorPressureOutput& pressure);

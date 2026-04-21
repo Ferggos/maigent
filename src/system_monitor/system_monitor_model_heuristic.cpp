@@ -51,41 +51,42 @@ SystemMonitorForecastOutput PredictForecastHeuristic(
   return out;
 }
 
-void ClassifyTargetHeuristic(SystemMonitorTargetOutput* target) {
+void ClassifyTargetHeuristic(UnifiedTarget* target) {
   if (target == nullptr) {
     return;
   }
 
   target->allowed_actions.clear();
-  const auto source = target->source_type;
-  if (source == MANAGED_TASK) {
+  const auto source = target->source;
+  if (source == TargetSource::kManagedTask) {
     target->is_protected = false;
-    target->allowed_actions.push_back(RENICE);
-    target->allowed_actions.push_back(SET_CPU_WEIGHT);
-    target->allowed_actions.push_back(SET_CPU_MAX);
-    target->allowed_actions.push_back(SET_MEM_HIGH);
-    target->allowed_actions.push_back(FREEZE);
-    target->allowed_actions.push_back(THAW);
-    target->allowed_actions.push_back(KILL);
+    target->allowed_actions.push_back(TargetAction::kRenice);
+    target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
+    target->allowed_actions.push_back(TargetAction::kSetCpuMax);
+    target->allowed_actions.push_back(TargetAction::kSetMemHigh);
+    target->allowed_actions.push_back(TargetAction::kFreeze);
+    target->allowed_actions.push_back(TargetAction::kThaw);
+    target->allowed_actions.push_back(TargetAction::kKill);
     return;
   }
 
-  if (source == EXTERNAL_PROCESS || source == EXTERNAL_GROUP) {
+  if (source == TargetSource::kExternalProcess ||
+      source == TargetSource::kExternalGroup) {
     target->is_protected = false;
-    target->allowed_actions.push_back(RENICE);
-    target->allowed_actions.push_back(SET_CPU_WEIGHT);
-    target->allowed_actions.push_back(SET_CPU_MAX);
-    target->allowed_actions.push_back(SET_MEM_HIGH);
-    target->allowed_actions.push_back(SET_MEM_MAX);
-    target->allowed_actions.push_back(FREEZE);
-    target->allowed_actions.push_back(THAW);
-    target->allowed_actions.push_back(KILL);
+    target->allowed_actions.push_back(TargetAction::kRenice);
+    target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
+    target->allowed_actions.push_back(TargetAction::kSetCpuMax);
+    target->allowed_actions.push_back(TargetAction::kSetMemHigh);
+    target->allowed_actions.push_back(TargetAction::kSetMemMax);
+    target->allowed_actions.push_back(TargetAction::kFreeze);
+    target->allowed_actions.push_back(TargetAction::kThaw);
+    target->allowed_actions.push_back(TargetAction::kKill);
     return;
   }
 
   target->is_protected = true;
-  target->allowed_actions.push_back(RENICE);
-  target->allowed_actions.push_back(SET_CPU_WEIGHT);
+  target->allowed_actions.push_back(TargetAction::kRenice);
+  target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
 }
 
 }  // namespace
@@ -127,20 +128,7 @@ SystemMonitorModelOutput HeuristicSystemMonitorModel::Evaluate(
   out.targets_ts_ms = input.host.ts_ms;
   out.targets.reserve(input.targets.size());
   for (const auto& target_in : input.targets) {
-    SystemMonitorTargetOutput target_out;
-    target_out.target_id = target_in.target_id;
-    target_out.source_type = target_in.source_type;
-    target_out.owner_executor_id = target_in.owner_executor_id;
-    target_out.task_id = target_in.task_id;
-    target_out.pid = target_in.pid;
-    target_out.cgroup_path = target_in.cgroup_path;
-    target_out.task_class = target_in.task_class;
-    target_out.priority = target_in.priority;
-    target_out.cpu_usage = target_in.cpu_usage;
-    target_out.memory_current_mb = target_in.memory_current_mb;
-    target_out.cpu_pressure = target_in.cpu_pressure;
-    target_out.memory_pressure = target_in.memory_pressure;
-    target_out.io_pressure = target_in.io_pressure;
+    UnifiedTarget target_out = target_in;
     ClassifyTargetHeuristic(&target_out);
     out.targets.push_back(std::move(target_out));
   }

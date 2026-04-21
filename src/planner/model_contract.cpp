@@ -1,5 +1,7 @@
 #include "maigent/planner/model_contract.h"
 
+#include "maigent/common/target_model_proto.h"
+
 namespace maigent {
 
 PlannerModelInput ToPlannerModelInput(const PressureState& pressure,
@@ -37,26 +39,7 @@ PlannerModelInput ToPlannerModelInput(const PressureState& pressure,
 
   out.targets.reserve(targets.targets_size());
   for (const auto& target : targets.targets()) {
-    PlannerTargetInput target_out;
-    target_out.target_id = target.target_id();
-    target_out.source_type = target.source_type();
-    target_out.owner_executor_id = target.owner_executor_id();
-    target_out.task_id = target.task_id();
-    target_out.pid = target.pid();
-    target_out.cgroup_path = target.cgroup_path();
-    target_out.task_class = target.task_class();
-    target_out.priority = target.priority();
-    target_out.is_protected = target.is_protected();
-    target_out.allowed_actions.reserve(target.allowed_actions_size());
-    for (int i = 0; i < target.allowed_actions_size(); ++i) {
-      target_out.allowed_actions.push_back(target.allowed_actions(i));
-    }
-    target_out.cpu_usage = target.cpu_usage();
-    target_out.memory_current_mb = target.memory_current_mb();
-    target_out.cpu_pressure = target.cpu_pressure();
-    target_out.memory_pressure = target.memory_pressure();
-    target_out.io_pressure = target.io_pressure();
-    out.targets.push_back(std::move(target_out));
+    out.targets.push_back(TargetFromProto(target));
   }
 
   return out;

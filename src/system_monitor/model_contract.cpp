@@ -1,5 +1,7 @@
 #include "maigent/system_monitor/model_contract.h"
 
+#include "maigent/common/target_model_proto.h"
+
 namespace maigent {
 
 PressureState ToProtoPressureState(const SystemMonitorPressureOutput& pressure) {
@@ -42,24 +44,7 @@ TargetsState ToProtoTargetsState(const SystemMonitorModelOutput& output) {
   TargetsState out;
   out.set_ts_ms(output.targets_ts_ms);
   for (const auto& target : output.targets) {
-    auto* t = out.add_targets();
-    t->set_target_id(target.target_id);
-    t->set_source_type(target.source_type);
-    t->set_owner_executor_id(target.owner_executor_id);
-    t->set_task_id(target.task_id);
-    t->set_pid(target.pid);
-    t->set_cgroup_path(target.cgroup_path);
-    t->set_task_class(target.task_class);
-    t->set_priority(target.priority);
-    t->set_is_protected(target.is_protected);
-    for (const auto action : target.allowed_actions) {
-      t->add_allowed_actions(action);
-    }
-    t->set_cpu_usage(target.cpu_usage);
-    t->set_memory_current_mb(target.memory_current_mb);
-    t->set_cpu_pressure(target.cpu_pressure);
-    t->set_memory_pressure(target.memory_pressure);
-    t->set_io_pressure(target.io_pressure);
+    *out.add_targets() = ToProtoTargetInfo(target);
   }
   return out;
 }

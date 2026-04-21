@@ -19,9 +19,10 @@ SystemMonitorModelInput SystemMonitorFeatureBuilder::BuildModelInput(
 
   out.targets.reserve(raw_snapshot.targets.size());
   for (const auto& target : raw_snapshot.targets) {
-    SystemMonitorTargetInput model_target;
+    UnifiedTarget model_target;
     model_target.target_id = target.target_id;
-    model_target.source_type = target.source_type;
+    model_target.kind = target.kind;
+    model_target.source = target.source;
     model_target.owner_executor_id = target.owner_executor_id;
     model_target.task_id = target.task_id;
     model_target.pid = target.pid;

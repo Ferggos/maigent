@@ -2,42 +2,43 @@
 
 namespace maigent {
 
-void HeuristicTargetClassifier::Classify(TargetInfo* target) {
+void HeuristicTargetClassifier::Classify(UnifiedTarget* target) {
   if (target == nullptr) {
     return;
   }
 
-  target->clear_allowed_actions();
+  target->allowed_actions.clear();
 
-  const auto source = target->source_type();
-  if (source == MANAGED_TASK) {
-    target->set_is_protected(false);
-    target->add_allowed_actions(RENICE);
-    target->add_allowed_actions(SET_CPU_WEIGHT);
-    target->add_allowed_actions(SET_CPU_MAX);
-    target->add_allowed_actions(SET_MEM_HIGH);
-    target->add_allowed_actions(FREEZE);
-    target->add_allowed_actions(THAW);
-    target->add_allowed_actions(KILL);
+  const auto source = target->source;
+  if (source == TargetSource::kManagedTask) {
+    target->is_protected = false;
+    target->allowed_actions.push_back(TargetAction::kRenice);
+    target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
+    target->allowed_actions.push_back(TargetAction::kSetCpuMax);
+    target->allowed_actions.push_back(TargetAction::kSetMemHigh);
+    target->allowed_actions.push_back(TargetAction::kFreeze);
+    target->allowed_actions.push_back(TargetAction::kThaw);
+    target->allowed_actions.push_back(TargetAction::kKill);
     return;
   }
 
-  if (source == EXTERNAL_PROCESS || source == EXTERNAL_GROUP) {
-    target->set_is_protected(false);
-    target->add_allowed_actions(RENICE);
-    target->add_allowed_actions(SET_CPU_WEIGHT);
-    target->add_allowed_actions(SET_CPU_MAX);
-    target->add_allowed_actions(SET_MEM_HIGH);
-    target->add_allowed_actions(SET_MEM_MAX);
-    target->add_allowed_actions(FREEZE);
-    target->add_allowed_actions(THAW);
-    target->add_allowed_actions(KILL);
+  if (source == TargetSource::kExternalProcess ||
+      source == TargetSource::kExternalGroup) {
+    target->is_protected = false;
+    target->allowed_actions.push_back(TargetAction::kRenice);
+    target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
+    target->allowed_actions.push_back(TargetAction::kSetCpuMax);
+    target->allowed_actions.push_back(TargetAction::kSetMemHigh);
+    target->allowed_actions.push_back(TargetAction::kSetMemMax);
+    target->allowed_actions.push_back(TargetAction::kFreeze);
+    target->allowed_actions.push_back(TargetAction::kThaw);
+    target->allowed_actions.push_back(TargetAction::kKill);
     return;
   }
 
-  target->set_is_protected(true);
-  target->add_allowed_actions(RENICE);
-  target->add_allowed_actions(SET_CPU_WEIGHT);
+  target->is_protected = true;
+  target->allowed_actions.push_back(TargetAction::kRenice);
+  target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
 }
 
 }  // namespace maigent

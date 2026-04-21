@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "maigent/system_monitor/model_contract.h"
+#include "maigent/common/target_model.h"
 #include "host_raw_collector.h"
 
 namespace maigent {
@@ -21,7 +21,8 @@ struct SystemMonitorManagedTaskRawRef {
 
 struct SystemMonitorTargetRawState {
   std::string target_id;
-  TargetSourceType source_type = TARGET_SOURCE_UNSPECIFIED;
+  TargetKind kind = TargetKind::kUnspecified;
+  TargetSource source = TargetSource::kUnspecified;
   std::string owner_executor_id;
   std::string task_id;
   int pid = 0;

@@ -120,7 +120,8 @@ SystemMonitorTargetRawState BuildManagedTaskTarget(
     const std::filesystem::path& cgroup_root) {
   SystemMonitorTargetRawState out;
   out.target_id = "managed:" + task.task_id;
-  out.source_type = MANAGED_TASK;
+  out.kind = TargetKind::kTask;
+  out.source = TargetSource::kManagedTask;
   out.owner_executor_id = task.executor_id;
   out.task_id = task.task_id;
   out.pid = task.pid;
@@ -152,7 +153,8 @@ SystemMonitorTargetRawState BuildExternalGroupTarget(
     const std::filesystem::path& cgroup_root) {
   SystemMonitorTargetRawState out;
   out.target_id = "external_group:system.slice";
-  out.source_type = EXTERNAL_GROUP;
+  out.kind = TargetKind::kCgroup;
+  out.source = TargetSource::kExternalGroup;
   out.cgroup_path = "system.slice";
   out.task_class = "external";
   out.priority = 0;
@@ -178,7 +180,8 @@ SystemMonitorTargetRawState BuildExternalGroupTarget(
 SystemMonitorTargetRawState BuildSystemServiceTarget() {
   SystemMonitorTargetRawState out;
   out.target_id = "system_service:pid1";
-  out.source_type = SYSTEM_SERVICE;
+  out.kind = TargetKind::kSystem;
+  out.source = TargetSource::kSystemService;
   out.pid = 1;
   out.task_class = "system";
   out.priority = 100;

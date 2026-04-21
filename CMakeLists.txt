@@ -45,6 +45,7 @@ add_library(ma_common STATIC
   src/common/ids.cpp
   src/common/config.cpp
   src/common/logging.cpp
+  src/common/target_model.cpp
   src/common/nats_wrapper.cpp
   src/common/message_helpers.cpp
   src/common/agent_lifecycle.cpp

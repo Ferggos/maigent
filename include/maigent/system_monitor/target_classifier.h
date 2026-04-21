@@ -1,18 +1,18 @@
 #pragma once
 
-#include "maigent.pb.h"
+#include "maigent/common/target_model.h"
 
 namespace maigent {
 
 class TargetClassifier {
  public:
   virtual ~TargetClassifier() = default;
-  virtual void Classify(TargetInfo* target) = 0;
+  virtual void Classify(UnifiedTarget* target) = 0;
 };
 
 class HeuristicTargetClassifier final : public TargetClassifier {
  public:
-  void Classify(TargetInfo* target) override;
+  void Classify(UnifiedTarget* target) override;
 };
 
 }  // namespace maigent

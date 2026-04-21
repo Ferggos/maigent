@@ -16,6 +16,7 @@
 #include "maigent/common/message_helpers.h"
 #include "maigent/common/nats_wrapper.h"
 #include "maigent/system_monitor/system_monitor_model.h"
+#include "maigent/system_monitor/target_classifier.h"
 #include "feature_builder.h"
 #include "raw_collector.h"
 
@@ -48,7 +49,8 @@ int main(int argc, char** argv) {
   }
 
   maigent::SystemMonitorRawCollector raw_collector(cgroup_root);
-  maigent::SystemMonitorFeatureBuilder feature_builder;
+  maigent::HeuristicTargetClassifier target_classifier;
+  maigent::SystemMonitorFeatureBuilder feature_builder(target_classifier);
   maigent::HeuristicSystemMonitorModel model;
 
   std::mutex mu;

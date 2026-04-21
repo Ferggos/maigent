@@ -51,44 +51,6 @@ SystemMonitorForecastOutput PredictForecastHeuristic(
   return out;
 }
 
-void ClassifyTargetHeuristic(UnifiedTarget* target) {
-  if (target == nullptr) {
-    return;
-  }
-
-  target->allowed_actions.clear();
-  const auto source = target->source;
-  if (source == TargetSource::kManagedTask) {
-    target->is_protected = false;
-    target->allowed_actions.push_back(TargetAction::kRenice);
-    target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
-    target->allowed_actions.push_back(TargetAction::kSetCpuMax);
-    target->allowed_actions.push_back(TargetAction::kSetMemHigh);
-    target->allowed_actions.push_back(TargetAction::kFreeze);
-    target->allowed_actions.push_back(TargetAction::kThaw);
-    target->allowed_actions.push_back(TargetAction::kKill);
-    return;
-  }
-
-  if (source == TargetSource::kExternalProcess ||
-      source == TargetSource::kExternalGroup) {
-    target->is_protected = false;
-    target->allowed_actions.push_back(TargetAction::kRenice);
-    target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
-    target->allowed_actions.push_back(TargetAction::kSetCpuMax);
-    target->allowed_actions.push_back(TargetAction::kSetMemHigh);
-    target->allowed_actions.push_back(TargetAction::kSetMemMax);
-    target->allowed_actions.push_back(TargetAction::kFreeze);
-    target->allowed_actions.push_back(TargetAction::kThaw);
-    target->allowed_actions.push_back(TargetAction::kKill);
-    return;
-  }
-
-  target->is_protected = true;
-  target->allowed_actions.push_back(TargetAction::kRenice);
-  target->allowed_actions.push_back(TargetAction::kSetCpuWeight);
-}
-
 }  // namespace
 
 SystemMonitorModelOutput HeuristicSystemMonitorModel::Evaluate(
@@ -126,12 +88,7 @@ SystemMonitorModelOutput HeuristicSystemMonitorModel::Evaluate(
   out.capacity.max_managed_tasks = std::max(4, out.capacity.cpu_millis_total / 750);
 
   out.targets_ts_ms = input.host.ts_ms;
-  out.targets.reserve(input.targets.size());
-  for (const auto& target_in : input.targets) {
-    UnifiedTarget target_out = target_in;
-    ClassifyTargetHeuristic(&target_out);
-    out.targets.push_back(std::move(target_out));
-  }
+  out.targets = input.targets;
 
   return out;
 }

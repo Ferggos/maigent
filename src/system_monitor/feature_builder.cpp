@@ -4,6 +4,10 @@
 
 namespace maigent {
 
+SystemMonitorFeatureBuilder::SystemMonitorFeatureBuilder(
+    TargetClassifier& target_classifier)
+    : target_classifier_(target_classifier) {}
+
 SystemMonitorModelInput SystemMonitorFeatureBuilder::BuildModelInput(
     const SystemMonitorRawSnapshot& raw_snapshot,
     const std::vector<SystemMonitorPressureHistorySample>& pressure_history) const {
@@ -34,6 +38,7 @@ SystemMonitorModelInput SystemMonitorFeatureBuilder::BuildModelInput(
     model_target.cpu_pressure = target.cpu_pressure;
     model_target.memory_pressure = target.memory_pressure;
     model_target.io_pressure = target.io_pressure;
+    target_classifier_.Classify(&model_target);
     out.targets.push_back(std::move(model_target));
   }
 

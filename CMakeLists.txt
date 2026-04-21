@@ -46,6 +46,7 @@ add_library(ma_common STATIC
   src/common/config.cpp
   src/common/logging.cpp
   src/common/target_model.cpp
+  src/common/target_model_proto.cpp
   src/common/nats_wrapper.cpp
   src/common/message_helpers.cpp
   src/common/agent_lifecycle.cpp
@@ -72,6 +73,7 @@ add_library(system_monitor_core STATIC
   src/system_monitor/raw_collector.cpp
   src/system_monitor/feature_builder.cpp
   src/system_monitor/model_contract.cpp
+  src/system_monitor/target_classifier_heuristic.cpp
   src/system_monitor/system_monitor_model_heuristic.cpp
 )
 target_link_libraries(system_monitor_core PUBLIC ma_common)

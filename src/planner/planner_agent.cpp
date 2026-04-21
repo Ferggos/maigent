@@ -16,6 +16,7 @@
 #include "maigent/common/nats_wrapper.h"
 #include "maigent/common/time_utils.h"
 #include "maigent/planner/planner_model.h"
+#include "maigent/planner/runtime_command_mapper.h"
 
 namespace {
 
@@ -217,9 +218,11 @@ int main(int argc, char** argv) {
                                        active_tasks_count);
       const maigent::PlannerModelOutput model_output =
           planner_model.Evaluate(model_input);
-      if (!model_output.actions.empty()) {
-        for (const auto& action : model_output.actions) {
-          dispatch_action(maigent::ToProtoControlAction(action), maigent::MakeTraceId());
+      const auto runtime_actions =
+          maigent::ToRuntimeControlActions(model_output);
+      if (!runtime_actions.empty()) {
+        for (const auto& action : runtime_actions) {
+          dispatch_action(action, maigent::MakeTraceId());
         }
         std::lock_guard<std::mutex> lock(mu);
         st.last_action_ms = now;

@@ -49,25 +49,40 @@ struct PlannerModelInput {
   int active_tasks = 0;
 };
 
-struct PlannerDecisionAction {
-  TargetType target_type = TARGET_TYPE_UNSPECIFIED;
+enum class PlannerInterventionType {
+  kUnspecified = 0,
+  kDeprioritize = 1,
+  kLimitCpuShare = 2,
+  kLimitCpuQuota = 3,
+  kLimitMemorySoft = 4,
+  kLimitMemoryHard = 5,
+  kPause = 6,
+  kResume = 7,
+  kTerminate = 8,
+};
+
+struct PlannerDecisionTarget {
   std::string target_id;
+  TargetKind target_kind = TargetKind::kUnspecified;
   std::string task_id;
-  std::string executor_id;
+  std::string owner_executor_id;
   int pid = 0;
   std::string cgroup_path;
-  ControlActionType action_type = CONTROL_ACTION_UNSPECIFIED;
+};
+
+struct PlannerIntervention {
+  PlannerDecisionTarget target;
+  PlannerInterventionType intervention_type = PlannerInterventionType::kUnspecified;
   std::unordered_map<std::string, double> numeric_params;
   std::unordered_map<std::string, std::string> string_params;
-  std::string reason;
-  std::string policy_id;
-  int64_t ts_ms = 0;
+  std::string rationale;
+  int apply_order = 0;
 };
 
 struct PlannerModelOutput {
   int64_t decision_ts_ms = 0;
   std::string strategy_id;
-  std::vector<PlannerDecisionAction> actions;
+  std::vector<PlannerIntervention> interventions;
 };
 
 PlannerModelInput ToPlannerModelInput(const PressureState& pressure,
@@ -75,7 +90,5 @@ PlannerModelInput ToPlannerModelInput(const PressureState& pressure,
                                       const CapacityState& capacity,
                                       const TargetsState& targets,
                                       int active_tasks);
-
-ControlAction ToProtoControlAction(const PlannerDecisionAction& action);
 
 }  // namespace maigent

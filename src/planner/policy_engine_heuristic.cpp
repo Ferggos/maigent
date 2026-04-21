@@ -2,8 +2,6 @@
 
 #include <algorithm>
 
-#include "maigent/common/target_model_proto.h"
-
 namespace maigent {
 
 HeuristicPlannerModel::HeuristicPlannerModel(int max_actions_per_tick)
@@ -47,59 +45,51 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
               return a->memory_current_mb > b->memory_current_mb;
             });
 
-  out.actions.reserve(static_cast<size_t>(max_actions_per_tick_));
+  out.interventions.reserve(static_cast<size_t>(max_actions_per_tick_));
   for (const UnifiedTarget* target : managed) {
-    if (static_cast<int>(out.actions.size()) >= max_actions_per_tick_) {
+    if (static_cast<int>(out.interventions.size()) >= max_actions_per_tick_) {
       break;
     }
 
-    PlannerDecisionAction action;
-    action.target_type = ToProtoTargetType(target->kind);
-    if (action.target_type == TARGET_TYPE_UNSPECIFIED) {
-      action.target_type = TARGET_TASK;
-    }
-    action.target_id = target->target_id;
-    action.task_id = target->task_id;
-    action.executor_id = target->owner_executor_id;
-    action.pid = target->pid;
-    action.cgroup_path = target->cgroup_path;
-    action.action_type = RENICE;
-    action.numeric_params["nice"] = 15.0;
-    action.reason = "heuristic policy: high pressure on managed task";
-    action.policy_id = "heuristic_policy_v1";
-    action.ts_ms = input.pressure.ts_ms;
-    out.actions.push_back(std::move(action));
+    PlannerIntervention intervention;
+    intervention.target.target_id = target->target_id;
+    intervention.target.target_kind = target->kind;
+    intervention.target.task_id = target->task_id;
+    intervention.target.owner_executor_id = target->owner_executor_id;
+    intervention.target.pid = target->pid;
+    intervention.target.cgroup_path = target->cgroup_path;
+    intervention.intervention_type = PlannerInterventionType::kDeprioritize;
+    intervention.numeric_params["nice"] = 15.0;
+    intervention.rationale = "heuristic policy: high pressure on managed task";
+    intervention.apply_order = static_cast<int>(out.interventions.size());
+    out.interventions.push_back(std::move(intervention));
   }
 
   for (const UnifiedTarget* target : external) {
-    if (static_cast<int>(out.actions.size()) >= max_actions_per_tick_) {
+    if (static_cast<int>(out.interventions.size()) >= max_actions_per_tick_) {
       break;
     }
 
-    PlannerDecisionAction action;
-    action.target_type = ToProtoTargetType(target->kind);
-    if (action.target_type == TARGET_TYPE_UNSPECIFIED) {
-      action.target_type = target->cgroup_path.empty() ? TARGET_PROCESS
-                                                       : TARGET_CGROUP;
-    }
-    action.target_id = target->target_id;
-    action.task_id = target->task_id;
-    action.executor_id = target->owner_executor_id;
-    action.pid = target->pid;
-    action.cgroup_path = target->cgroup_path;
+    PlannerIntervention intervention;
+    intervention.target.target_id = target->target_id;
+    intervention.target.target_kind = target->kind;
+    intervention.target.task_id = target->task_id;
+    intervention.target.owner_executor_id = target->owner_executor_id;
+    intervention.target.pid = target->pid;
+    intervention.target.cgroup_path = target->cgroup_path;
 
     if (!target->cgroup_path.empty()) {
-      action.action_type = SET_CPU_WEIGHT;
-      action.numeric_params["cpu_weight"] = 50.0;
+      intervention.intervention_type = PlannerInterventionType::kLimitCpuShare;
+      intervention.numeric_params["cpu_weight"] = 50.0;
     } else {
-      action.action_type = RENICE;
-      action.numeric_params["nice"] = 12.0;
+      intervention.intervention_type = PlannerInterventionType::kDeprioritize;
+      intervention.numeric_params["nice"] = 12.0;
     }
 
-    action.reason = "heuristic policy: high pressure on external target";
-    action.policy_id = "heuristic_policy_v1";
-    action.ts_ms = input.pressure.ts_ms;
-    out.actions.push_back(std::move(action));
+    intervention.rationale =
+        "heuristic policy: high pressure on external target";
+    intervention.apply_order = static_cast<int>(out.interventions.size());
+    out.interventions.push_back(std::move(intervention));
   }
 
   (void)input.capacity;

@@ -45,25 +45,4 @@ PlannerModelInput ToPlannerModelInput(const PressureState& pressure,
   return out;
 }
 
-ControlAction ToProtoControlAction(const PlannerDecisionAction& action) {
-  ControlAction out;
-  out.set_target_type(action.target_type);
-  out.set_target_id(action.target_id);
-  out.set_task_id(action.task_id);
-  out.set_executor_id(action.executor_id);
-  out.set_pid(action.pid);
-  out.set_cgroup_path(action.cgroup_path);
-  out.set_action_type(action.action_type);
-  for (const auto& [key, value] : action.numeric_params) {
-    (*out.mutable_numeric_params())[key] = value;
-  }
-  for (const auto& [key, value] : action.string_params) {
-    (*out.mutable_string_params())[key] = value;
-  }
-  out.set_reason(action.reason);
-  out.set_policy_id(action.policy_id);
-  out.set_ts_ms(action.ts_ms);
-  return out;
-}
-
 }  // namespace maigent

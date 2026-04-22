@@ -220,6 +220,12 @@ int main(int argc, char** argv) {
           planner_model.Evaluate(model_input);
       const auto runtime_actions =
           maigent::ToRuntimeControlActions(model_output, model_input.targets);
+      if (runtime_actions.size() < model_output.interventions.size()) {
+        log.Warn("dropped interventions due unsupported target capability or "
+                 "missing dispatch metadata dropped=" +
+                 std::to_string(model_output.interventions.size() -
+                                runtime_actions.size()));
+      }
       if (!runtime_actions.empty()) {
         for (const auto& action : runtime_actions) {
           dispatch_action(action, maigent::MakeTraceId());

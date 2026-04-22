@@ -4,6 +4,15 @@
 
 namespace maigent {
 
+namespace {
+
+bool SupportsAction(const UnifiedTarget& target, TargetAction action) {
+  return std::find(target.allowed_actions.begin(), target.allowed_actions.end(),
+                   action) != target.allowed_actions.end();
+}
+
+}  // namespace
+
 HeuristicPlannerModel::HeuristicPlannerModel(int max_actions_per_tick)
     : max_actions_per_tick_(std::max(1, max_actions_per_tick)) {}
 
@@ -50,6 +59,9 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
     if (static_cast<int>(out.interventions.size()) >= max_actions_per_tick_) {
       break;
     }
+    if (!SupportsAction(*target, TargetAction::kRenice)) {
+      continue;
+    }
 
     PlannerIntervention intervention;
     intervention.target.target_id = target->target_id;
@@ -68,12 +80,14 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
     PlannerIntervention intervention;
     intervention.target.target_id = target->target_id;
 
-    if (!target->cgroup_path.empty()) {
+    if (SupportsAction(*target, TargetAction::kSetCpuWeight)) {
       intervention.intervention_type = PlannerInterventionType::kLimitCpuShare;
       intervention.numeric_params["cpu_weight"] = 50.0;
-    } else {
+    } else if (SupportsAction(*target, TargetAction::kRenice)) {
       intervention.intervention_type = PlannerInterventionType::kDeprioritize;
       intervention.numeric_params["nice"] = 12.0;
+    } else {
+      continue;
     }
 
     intervention.rationale =

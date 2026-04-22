@@ -25,6 +25,87 @@ TargetType ResolveRuntimeTargetType(const UnifiedTarget& target) {
   return TARGET_TYPE_UNSPECIFIED;
 }
 
+std::optional<TargetAction> ToTargetAction(PlannerInterventionType type) {
+  switch (type) {
+    case PlannerInterventionType::kDeprioritize:
+      return TargetAction::kRenice;
+    case PlannerInterventionType::kLimitCpuShare:
+      return TargetAction::kSetCpuWeight;
+    case PlannerInterventionType::kLimitCpuQuota:
+      return TargetAction::kSetCpuMax;
+    case PlannerInterventionType::kLimitMemorySoft:
+      return TargetAction::kSetMemHigh;
+    case PlannerInterventionType::kLimitMemoryHard:
+      return TargetAction::kSetMemMax;
+    case PlannerInterventionType::kPause:
+      return TargetAction::kFreeze;
+    case PlannerInterventionType::kResume:
+      return TargetAction::kThaw;
+    case PlannerInterventionType::kTerminate:
+      return TargetAction::kKill;
+    case PlannerInterventionType::kUnspecified:
+    default:
+      return std::nullopt;
+  }
+}
+
+bool HasAllowedAction(const UnifiedTarget& target, TargetAction action) {
+  return std::find(target.allowed_actions.begin(), target.allowed_actions.end(),
+                   action) != target.allowed_actions.end();
+}
+
+bool IsCgroupOnlyAction(PlannerInterventionType type) {
+  return type == PlannerInterventionType::kLimitCpuShare ||
+         type == PlannerInterventionType::kLimitCpuQuota ||
+         type == PlannerInterventionType::kLimitMemorySoft ||
+         type == PlannerInterventionType::kLimitMemoryHard;
+}
+
+bool ValidateDispatchMetadata(const PlannerIntervention& intervention,
+                              const UnifiedTarget& target,
+                              const PlannerDispatchMetadata& dispatch) {
+  if (ToRuntimeControlActionType(intervention.intervention_type) ==
+      CONTROL_ACTION_UNSPECIFIED) {
+    return false;
+  }
+  const auto target_action = ToTargetAction(intervention.intervention_type);
+  if (!target_action.has_value() || !HasAllowedAction(target, *target_action)) {
+    return false;
+  }
+  if (dispatch.runtime_target_type == TARGET_TYPE_UNSPECIFIED) {
+    return false;
+  }
+
+  const bool task_route = dispatch.runtime_target_type == TARGET_TASK;
+  if (task_route) {
+    if (dispatch.executor_id.empty() || dispatch.task_id.empty()) {
+      return false;
+    }
+    // TaskExecutor currently supports only process-style actions.
+    if (IsCgroupOnlyAction(intervention.intervention_type)) {
+      return false;
+    }
+    return true;
+  }
+
+  switch (intervention.intervention_type) {
+    case PlannerInterventionType::kDeprioritize:
+    case PlannerInterventionType::kTerminate:
+      return dispatch.pid > 0;
+    case PlannerInterventionType::kLimitCpuShare:
+    case PlannerInterventionType::kLimitCpuQuota:
+    case PlannerInterventionType::kLimitMemorySoft:
+    case PlannerInterventionType::kLimitMemoryHard:
+      return !dispatch.cgroup_path.empty();
+    case PlannerInterventionType::kPause:
+    case PlannerInterventionType::kResume:
+      return dispatch.pid > 0 || !dispatch.cgroup_path.empty();
+    case PlannerInterventionType::kUnspecified:
+    default:
+      return false;
+  }
+}
+
 }  // namespace
 
 ControlActionType ToRuntimeControlActionType(PlannerInterventionType type) {
@@ -69,6 +150,9 @@ std::optional<PlannerDispatchMetadata> ResolveDispatchMetadata(
   dispatch.executor_id = it->owner_executor_id;
   dispatch.pid = it->pid;
   dispatch.cgroup_path = it->cgroup_path;
+  if (!ValidateDispatchMetadata(intervention, *it, dispatch)) {
+    return std::nullopt;
+  }
   return dispatch;
 }
 

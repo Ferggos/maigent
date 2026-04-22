@@ -30,6 +30,7 @@
 namespace {
 
 std::atomic<bool> g_stop{false};
+constexpr const char* kSubjectCmdTaskExecControlAll = "msg.command.taskexec.control.*";
 
 void HandleSignal(int) { g_stop.store(true); }
 
@@ -61,6 +62,9 @@ struct Counters {
   int failed = 0;
   int denied = 0;
   int timeouts = 0;
+  int runtime_actions_emitted = 0;
+  int runtime_actions_emitted_task_executor = 0;
+  int runtime_actions_emitted_actuator = 0;
   int control_applied = 0;
   int control_failed = 0;
   int actuator_applied = 0;
@@ -775,6 +779,55 @@ int main(int argc, char** argv) {
                      "{\"type\":\"actuator_failed\"}");
   });
 
+  auto on_runtime_control_command = [&](const maigent::NatsMessage& msg,
+                                        maigent::MessageKind expected_kind,
+                                        const char* route_name) {
+    maigent::Envelope env;
+    if (!maigent::ParseEnvelope(msg.data.data(), static_cast<int>(msg.data.size()), &env) ||
+        !env.has_command() || !env.command().has_control_action()) {
+      return;
+    }
+    if (!env.has_header() || env.header().message_category() != maigent::COMMAND ||
+        env.header().message_kind() != expected_kind) {
+      return;
+    }
+
+    ensure_bench();
+    count_message(env);
+
+    const auto& action = env.command().control_action();
+    {
+      std::lock_guard<std::mutex> lock(mu);
+      counters.runtime_actions_emitted++;
+      if (expected_kind == maigent::MK_TASK_CONTROL) {
+        counters.runtime_actions_emitted_task_executor++;
+      } else {
+        counters.runtime_actions_emitted_actuator++;
+      }
+    }
+
+    files.WriteEvent(
+        msg.subject, env,
+        std::string("{\"type\":\"runtime_action_emitted\",\"route\":\"") +
+            route_name + "\",\"action_type\":" +
+            std::to_string(action.action_type()) + ",\"target_id\":\"" +
+            JsonEscape(action.target_id()) + "\",\"task_id\":\"" +
+            JsonEscape(action.task_id()) + "\",\"executor_id\":\"" +
+            JsonEscape(action.executor_id()) + "\"}");
+  };
+
+  nats.Subscribe(maigent::kSubjectCmdActuatorApply,
+                 [&](const maigent::NatsMessage& msg) {
+                   on_runtime_control_command(msg, maigent::MK_ACTUATOR_APPLY,
+                                              "actuator");
+                 });
+
+  nats.Subscribe(kSubjectCmdTaskExecControlAll,
+                 [&](const maigent::NatsMessage& msg) {
+                   on_runtime_control_command(msg, maigent::MK_TASK_CONTROL,
+                                              "task_executor");
+                 });
+
   nats.Subscribe(maigent::kSubjectStatePressure, [&](const maigent::NatsMessage& msg) {
     maigent::Envelope env;
     if (!maigent::ParseEnvelope(msg.data.data(), static_cast<int>(msg.data.size()), &env) ||
@@ -787,6 +840,7 @@ int main(int argc, char** argv) {
     }
 
     ensure_bench();
+    count_message(env);
     {
       std::lock_guard<std::mutex> lock(mu);
       latest_pressure = env.state().pressure_state();
@@ -814,6 +868,7 @@ int main(int argc, char** argv) {
     }
 
     ensure_bench();
+    count_message(env);
     {
       std::lock_guard<std::mutex> lock(mu);
       latest_forecast = env.state().forecast_state();
@@ -838,6 +893,7 @@ int main(int argc, char** argv) {
     }
 
     ensure_bench();
+    count_message(env);
     {
       std::lock_guard<std::mutex> lock(mu);
       latest_capacity = env.state().capacity_state();
@@ -862,6 +918,7 @@ int main(int argc, char** argv) {
     }
 
     ensure_bench();
+    count_message(env);
     {
       std::lock_guard<std::mutex> lock(mu);
       latest_targets = env.state().targets_state();
@@ -925,10 +982,21 @@ int main(int argc, char** argv) {
     std::vector<double> launch_latency;
     std::vector<double> run_ms;
     std::vector<double> queue_wait_ms;
+    std::vector<double> submit_to_start_immediate;
+    std::vector<double> submit_to_start_queued;
+    std::vector<double> end_to_end_immediate;
+    std::vector<double> end_to_end_queued;
+    std::vector<double> queue_wait_queued;
 
     struct SlowTask {
       std::string task_id;
-      double total_ms;
+      double end_to_end_ms = -1.0;
+      double queue_wait_ms = -1.0;
+      double reserve_latency_ms = -1.0;
+      double launch_latency_ms = -1.0;
+      double run_ms = -1.0;
+      bool failed = false;
+      bool queued = false;
     };
     std::vector<SlowTask> slowest;
 
@@ -966,10 +1034,20 @@ int main(int argc, char** argv) {
 
       if (s2st >= 0) {
         submit_to_start.push_back(s2st);
+        if (t.queued_once) {
+          submit_to_start_queued.push_back(s2st);
+        } else {
+          submit_to_start_immediate.push_back(s2st);
+        }
       }
       if (s2f >= 0) {
         submit_to_finish.push_back(s2f);
-        slowest.push_back({task_id, s2f});
+        if (t.queued_once) {
+          end_to_end_queued.push_back(s2f);
+        } else {
+          end_to_end_immediate.push_back(s2f);
+        }
+        slowest.push_back({task_id, s2f, qwait, rsv, lch, run, t.failed, t.queued_once});
       }
       if (rsv >= 0) {
         reserve_latency.push_back(rsv);
@@ -982,6 +1060,9 @@ int main(int argc, char** argv) {
       }
       if (qwait >= 0) {
         queue_wait_ms.push_back(qwait);
+        if (t.queued_once) {
+          queue_wait_queued.push_back(qwait);
+        }
       }
       if (!t.failed && t.finish_ts > 0) {
         completed_non_failed++;
@@ -1001,20 +1082,33 @@ int main(int argc, char** argv) {
     }
 
     std::sort(slowest.begin(), slowest.end(),
-              [](const SlowTask& a, const SlowTask& b) { return a.total_ms > b.total_ms; });
+              [](const SlowTask& a, const SlowTask& b) {
+                return a.end_to_end_ms > b.end_to_end_ms;
+              });
 
     const StatSummary s_submit_to_start = BuildSummary(submit_to_start);
-    const StatSummary s_submit_to_finish = BuildSummary(submit_to_finish);
+    const StatSummary s_end_to_end = BuildSummary(submit_to_finish);
     const StatSummary s_reserve = BuildSummary(reserve_latency);
     const StatSummary s_launch = BuildSummary(launch_latency);
     const StatSummary s_run = BuildSummary(run_ms);
     const StatSummary s_queue_wait = BuildSummary(queue_wait_ms);
+    const StatSummary s_submit_to_start_immediate =
+        BuildSummary(submit_to_start_immediate);
+    const StatSummary s_submit_to_start_queued = BuildSummary(submit_to_start_queued);
+    const StatSummary s_end_to_end_immediate = BuildSummary(end_to_end_immediate);
+    const StatSummary s_end_to_end_queued = BuildSummary(end_to_end_queued);
+    const StatSummary s_queue_wait_queued = BuildSummary(queue_wait_queued);
 
     const double wall_time_sec =
         (b.stop_ts > b.start_ts) ? static_cast<double>(b.stop_ts - b.start_ts) / 1000.0 : 0.0;
     const double throughput = wall_time_sec > 0.0
                                   ? static_cast<double>(completed_non_failed) / wall_time_sec
                                   : 0.0;
+    const int runtime_actions_with_outcome =
+        cnt.control_applied + cnt.control_failed + cnt.actuator_applied +
+        cnt.actuator_failed;
+    const int runtime_actions_missing_outcome =
+        std::max(0, cnt.runtime_actions_emitted - runtime_actions_with_outcome);
 
     std::ostringstream report;
     report << "=============== MetricsCollector Summary ===============\n";
@@ -1035,6 +1129,15 @@ int main(int argc, char** argv) {
     report << std::fixed << std::setprecision(3)
            << "throughput_tasks_per_sec: " << throughput << "\n";
     report << "max_concurrency: " << max_cc << "\n";
+    report << "runtime_actions_emitted: " << cnt.runtime_actions_emitted << "\n";
+    report << "runtime_actions_emitted_task_executor: "
+           << cnt.runtime_actions_emitted_task_executor << "\n";
+    report << "runtime_actions_emitted_actuator: "
+           << cnt.runtime_actions_emitted_actuator << "\n";
+    report << "runtime_actions_with_outcome: " << runtime_actions_with_outcome
+           << "\n";
+    report << "runtime_actions_missing_outcome: " << runtime_actions_missing_outcome
+           << "\n";
     report << "control_actions_applied: " << cnt.control_applied << "\n";
     report << "control_actions_failed: " << cnt.control_failed << "\n";
     report << "actuator_actions_applied: " << cnt.actuator_applied << "\n";
@@ -1044,12 +1147,24 @@ int main(int argc, char** argv) {
     report << "state_messages_seen: " << state_seen << "\n";
     report << "service_messages_seen: " << service_seen << "\n";
 
+    report << "system_latency_ms:\n";
     report << FormatStat("submit_to_start_ms", s_submit_to_start);
-    report << FormatStat("submit_to_finish_ms", s_submit_to_finish);
+    report << FormatStat("end_to_end_ms", s_end_to_end);
     report << FormatStat("reserve_latency_ms", s_reserve);
+    report << FormatStat("queue_wait_ms", s_queue_wait);
+
+    report << "execution_latency_ms:\n";
     report << FormatStat("launch_latency_ms", s_launch);
     report << FormatStat("run_ms", s_run);
-    report << FormatStat("queue_wait_ms", s_queue_wait);
+
+    report << "immediate_path_latency_ms:\n";
+    report << FormatStat("submit_to_start_ms", s_submit_to_start_immediate);
+    report << FormatStat("end_to_end_ms", s_end_to_end_immediate);
+
+    report << "queued_path_latency_ms:\n";
+    report << FormatStat("submit_to_start_ms", s_submit_to_start_queued);
+    report << FormatStat("end_to_end_ms", s_end_to_end_queued);
+    report << FormatStat("queue_wait_ms", s_queue_wait_queued);
 
     report << "counts_by_task_class:\n";
     for (const auto& [task_class, count] : by_class) {
@@ -1072,9 +1187,26 @@ int main(int argc, char** argv) {
     }
 
     report << "slowest_top_10:\n";
+    auto format_ms = [](double value) -> std::string {
+      if (value < 0.0) {
+        return "n/a";
+      }
+      std::ostringstream ms;
+      ms << std::fixed << std::setprecision(2) << value;
+      return ms.str();
+    };
     for (size_t i = 0; i < slowest.size() && i < 10; ++i) {
       report << "  " << (i + 1) << ". " << slowest[i].task_id
-             << " total_ms=" << slowest[i].total_ms << "\n";
+             << " end_to_end_ms=" << format_ms(slowest[i].end_to_end_ms)
+             << " queue_wait_ms=" << format_ms(slowest[i].queue_wait_ms)
+             << " reserve_latency_ms="
+             << format_ms(slowest[i].reserve_latency_ms)
+             << " launch_latency_ms="
+             << format_ms(slowest[i].launch_latency_ms)
+             << " run_ms=" << format_ms(slowest[i].run_ms)
+             << " status=" << (slowest[i].failed ? "failed" : "finished")
+             << " route=" << (slowest[i].queued ? "queued" : "immediate")
+             << "\n";
     }
     report << "========================================================\n";
 

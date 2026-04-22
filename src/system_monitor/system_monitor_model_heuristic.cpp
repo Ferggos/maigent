@@ -1,7 +1,6 @@
 #include "maigent/system_monitor/system_monitor_model.h"
 
 #include <algorithm>
-#include <thread>
 #include <vector>
 
 #include "maigent/common/time_utils.h"
@@ -64,11 +63,18 @@ SystemMonitorModelOutput HeuristicSystemMonitorModel::Evaluate(
   out.pressure.cpu_pressure_some = input.host.psi_cpu_some;
   out.pressure.memory_pressure_some = input.host.psi_mem_some;
   out.pressure.io_pressure_some = input.host.psi_io_some;
-  if (input.host.cpu_usage_pct >= 85.0 || input.host.mem_available_mb < 768 ||
-      input.host.psi_mem_some > 1.0) {
+
+  const double cpu_fast_signal =
+      std::max(input.host.cpu_usage_pct, input.host.cpu_usage_ema_short);
+  const double cpu_slow_signal =
+      std::max(input.host.cpu_usage_pct, input.host.cpu_usage_ema_long);
+  if (cpu_fast_signal >= 85.0 || input.host.mem_available_mb < 768 ||
+      input.host.mem_available_ratio < 0.08 || input.host.psi_mem_some > 1.0 ||
+      input.host.mem_some_avg60 > 0.8) {
     out.pressure.risk_level = RISK_HIGH;
-  } else if (input.host.cpu_usage_pct >= 70.0 || input.host.mem_available_mb < 1536 ||
-             input.host.psi_mem_some > 0.3) {
+  } else if (cpu_slow_signal >= 70.0 || input.host.mem_available_mb < 1536 ||
+             input.host.mem_available_ratio < 0.16 ||
+             input.host.psi_mem_some > 0.3 || input.host.mem_some_avg60 > 0.3) {
     out.pressure.risk_level = RISK_MED;
   } else {
     out.pressure.risk_level = RISK_LOW;
@@ -77,7 +83,7 @@ SystemMonitorModelOutput HeuristicSystemMonitorModel::Evaluate(
   out.forecast = PredictForecastHeuristic(out.pressure, input.pressure_history);
 
   out.capacity.ts_ms = input.host.ts_ms;
-  const int cpu_total = static_cast<int>(std::thread::hardware_concurrency() * 1000);
+  const int cpu_total = std::max(1, input.host.logical_cpu_count) * 1000;
   out.capacity.cpu_millis_total = cpu_total > 0 ? cpu_total : 4000;
   out.capacity.cpu_millis_allocatable =
       static_cast<int>(out.capacity.cpu_millis_total * 0.85);

@@ -11,22 +11,27 @@ namespace maigent {
 
 namespace {
 
-double ParsePressureAvg10(const std::filesystem::path& file) {
+double ParsePressureAvg(const std::filesystem::path& file,
+                        const char* line_prefix,
+                        const char* metric_name) {
   std::ifstream in(file);
   if (!in.is_open()) {
     return 0.0;
   }
+
+  const std::string expected_prefix(line_prefix);
+  const std::string expected_metric = std::string(metric_name) + "=";
   std::string line;
   while (std::getline(in, line)) {
-    if (line.rfind("some", 0) != 0) {
+    if (line.rfind(expected_prefix, 0) != 0) {
       continue;
     }
     std::istringstream iss(line);
     std::string token;
     while (iss >> token) {
-      if (token.rfind("avg10=", 0) == 0) {
+      if (token.rfind(expected_metric, 0) == 0) {
         try {
-          return std::stod(token.substr(6));
+          return std::stod(token.substr(expected_metric.size()));
         } catch (...) {
           return 0.0;
         }
@@ -67,37 +72,59 @@ int64_t ReadVmRssMb(int pid) {
   return 0;
 }
 
-double ReadCpuStatUsageHint(const std::filesystem::path& file) {
+struct CpuStatSample {
+  double usage_seconds = 0.0;
+  int64_t nr_periods = 0;
+  int64_t nr_throttled = 0;
+};
+
+CpuStatSample ReadCpuStatSample(const std::filesystem::path& file) {
+  CpuStatSample out;
   std::ifstream in(file);
   if (!in.is_open()) {
-    return 0.0;
+    return out;
   }
 
   std::string key;
   int64_t value = 0;
   while (in >> key >> value) {
     if (key == "usage_usec") {
-      return static_cast<double>(value) / 1000000.0;
+      out.usage_seconds = static_cast<double>(value) / 1000000.0;
+    } else if (key == "nr_periods") {
+      out.nr_periods = value;
+    } else if (key == "nr_throttled") {
+      out.nr_throttled = value;
     }
     std::string rest_of_line;
     std::getline(in, rest_of_line);
   }
-  return 0.0;
+  return out;
 }
 
-int64_t ReadMemoryEventsTotal(const std::filesystem::path& file) {
+struct MemoryEventsSample {
+  int64_t total = 0;
+  int64_t high = 0;
+  int64_t oom = 0;
+};
+
+MemoryEventsSample ReadMemoryEventsSample(const std::filesystem::path& file) {
+  MemoryEventsSample out;
   std::ifstream in(file);
   if (!in.is_open()) {
-    return 0;
+    return out;
   }
 
   std::string key;
   int64_t value = 0;
-  int64_t total = 0;
   while (in >> key >> value) {
-    total += value;
+    out.total += value;
+    if (key == "high") {
+      out.high = value;
+    } else if (key == "oom") {
+      out.oom = value;
+    }
   }
-  return total;
+  return out;
 }
 
 int64_t ReadIoStatLines(const std::filesystem::path& file) {
@@ -122,6 +149,7 @@ SystemMonitorTargetRawState BuildManagedTaskTarget(
   out.target_id = "managed:" + task.task_id;
   out.kind = TargetKind::kTask;
   out.source = TargetSource::kManagedTask;
+  out.started_ms = task.started_ms;
   out.owner_executor_id = task.executor_id;
   out.task_id = task.task_id;
   out.pid = task.pid;
@@ -132,13 +160,23 @@ SystemMonitorTargetRawState BuildManagedTaskTarget(
 
   if (!task.cgroup_path.empty()) {
     const std::filesystem::path cg = cgroup_root / task.cgroup_path;
-    out.cpu_usage = ReadCpuStatUsageHint(cg / "cpu.stat");
-    const int64_t mem_events = ReadMemoryEventsTotal(cg / "memory.events");
+    const CpuStatSample cpu_stat = ReadCpuStatSample(cg / "cpu.stat");
+    out.cpu_usage = cpu_stat.usage_seconds;
+    if (cpu_stat.nr_periods > 0) {
+      out.cpu_throttled_ratio = std::clamp(
+          static_cast<double>(cpu_stat.nr_throttled) /
+              static_cast<double>(cpu_stat.nr_periods),
+          0.0, 1.0);
+    }
+    const MemoryEventsSample mem_events = ReadMemoryEventsSample(cg / "memory.events");
+    out.memory_events_high = mem_events.high;
+    out.memory_events_oom = mem_events.oom;
     const int64_t io_lines = ReadIoStatLines(cg / "io.stat");
-    out.cpu_pressure = ParsePressureAvg10(cg / "cpu.pressure");
-    out.memory_pressure = ParsePressureAvg10(cg / "memory.pressure");
-    out.io_pressure = ParsePressureAvg10(cg / "io.pressure");
-    if (mem_events > 0) {
+    out.cpu_pressure = ParsePressureAvg(cg / "cpu.pressure", "some", "avg10");
+    out.memory_pressure =
+        ParsePressureAvg(cg / "memory.pressure", "some", "avg10");
+    out.io_pressure = ParsePressureAvg(cg / "io.pressure", "some", "avg10");
+    if (mem_events.total > 0) {
       out.memory_pressure = std::max(out.memory_pressure, 0.1);
     }
     if (io_lines > 0) {
@@ -162,13 +200,22 @@ SystemMonitorTargetRawState BuildExternalGroupTarget(
   const std::filesystem::path cg = cgroup_root / "system.slice";
   out.memory_current_mb =
       static_cast<double>(ReadIntFile(cg / "memory.current")) / (1024.0 * 1024.0);
-  out.cpu_usage = ReadCpuStatUsageHint(cg / "cpu.stat");
-  const int64_t mem_events = ReadMemoryEventsTotal(cg / "memory.events");
+  const CpuStatSample cpu_stat = ReadCpuStatSample(cg / "cpu.stat");
+  out.cpu_usage = cpu_stat.usage_seconds;
+  if (cpu_stat.nr_periods > 0) {
+    out.cpu_throttled_ratio = std::clamp(
+        static_cast<double>(cpu_stat.nr_throttled) /
+            static_cast<double>(cpu_stat.nr_periods),
+        0.0, 1.0);
+  }
+  const MemoryEventsSample mem_events = ReadMemoryEventsSample(cg / "memory.events");
+  out.memory_events_high = mem_events.high;
+  out.memory_events_oom = mem_events.oom;
   const int64_t io_lines = ReadIoStatLines(cg / "io.stat");
-  out.cpu_pressure = ParsePressureAvg10(cg / "cpu.pressure");
-  out.memory_pressure = ParsePressureAvg10(cg / "memory.pressure");
-  out.io_pressure = ParsePressureAvg10(cg / "io.pressure");
-  if (mem_events > 0) {
+  out.cpu_pressure = ParsePressureAvg(cg / "cpu.pressure", "some", "avg10");
+  out.memory_pressure = ParsePressureAvg(cg / "memory.pressure", "some", "avg10");
+  out.io_pressure = ParsePressureAvg(cg / "io.pressure", "some", "avg10");
+  if (mem_events.total > 0) {
     out.memory_pressure = std::max(out.memory_pressure, 0.1);
   }
   if (io_lines > 0) {

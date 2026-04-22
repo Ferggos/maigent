@@ -23,6 +23,7 @@ struct SystemMonitorTargetRawState {
   std::string target_id;
   TargetKind kind = TargetKind::kUnspecified;
   TargetSource source = TargetSource::kUnspecified;
+  int64_t started_ms = 0;
   std::string owner_executor_id;
   std::string task_id;
   int pid = 0;
@@ -30,7 +31,10 @@ struct SystemMonitorTargetRawState {
   std::string task_class;
   int priority = 0;
   double cpu_usage = 0.0;
+  double cpu_throttled_ratio = 0.0;
   double memory_current_mb = 0.0;
+  int64_t memory_events_high = 0;
+  int64_t memory_events_oom = 0;
   double cpu_pressure = 0.0;
   double memory_pressure = 0.0;
   double io_pressure = 0.0;

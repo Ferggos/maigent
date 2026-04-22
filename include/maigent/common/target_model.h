@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -53,6 +54,14 @@ struct UnifiedTarget {
   double cpu_pressure = 0.0;
   double memory_pressure = 0.0;
   double io_pressure = 0.0;
+
+  double cpu_usage_delta = 0.0;
+  double memory_delta_mb = 0.0;
+  double memory_ratio_of_host = 0.0;
+  double age_sec = 0.0;
+  double cpu_throttled_ratio = 0.0;
+  int64_t memory_events_high_delta = 0;
+  int64_t memory_events_oom_delta = 0;
 };
 
 TargetKind InferTargetKind(TargetSource source, const std::string& cgroup_path,

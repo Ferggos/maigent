@@ -32,10 +32,26 @@ bool HostRawCollector::Sample(HostRawState* out) {
 
   out->mem_total_mb = ReadMemInfoMb("MemTotal:");
   out->mem_available_mb = ReadMemInfoMb("MemAvailable:");
+  out->swap_total_mb = ReadMemInfoMb("SwapTotal:");
+  out->swap_free_mb = ReadMemInfoMb("SwapFree:");
   out->load1 = ReadLoadAvg();
-  out->psi_cpu_some = ReadPressureAvg10("/proc/pressure/cpu");
-  out->psi_mem_some = ReadPressureAvg10("/proc/pressure/memory");
-  out->psi_io_some = ReadPressureAvg10("/proc/pressure/io");
+  out->psi_cpu_some = ReadPressureAvg("/proc/pressure/cpu", "some", "avg10");
+  out->psi_mem_some = ReadPressureAvg("/proc/pressure/memory", "some", "avg10");
+  out->psi_io_some = ReadPressureAvg("/proc/pressure/io", "some", "avg10");
+  out->psi_cpu_some_avg60 =
+      ReadPressureAvg("/proc/pressure/cpu", "some", "avg60");
+  out->psi_mem_some_avg60 =
+      ReadPressureAvg("/proc/pressure/memory", "some", "avg60");
+  out->psi_io_some_avg60 =
+      ReadPressureAvg("/proc/pressure/io", "some", "avg60");
+  out->psi_mem_full_avg10 =
+      ReadPressureAvg("/proc/pressure/memory", "full", "avg10");
+  out->psi_mem_full_avg60 =
+      ReadPressureAvg("/proc/pressure/memory", "full", "avg60");
+  out->psi_io_full_avg10 =
+      ReadPressureAvg("/proc/pressure/io", "full", "avg10");
+  out->psi_io_full_avg60 =
+      ReadPressureAvg("/proc/pressure/io", "full", "avg60");
   return true;
 }
 
@@ -96,24 +112,28 @@ double HostRawCollector::ReadLoadAvg() const {
   return load1;
 }
 
-double HostRawCollector::ReadPressureAvg10(const char* path) const {
+double HostRawCollector::ReadPressureAvg(const char* path,
+                                         const char* line_prefix,
+                                         const char* metric_name) const {
   std::ifstream in(path);
   if (!in.is_open()) {
     return 0.0;
   }
 
+  const std::string expected_prefix(line_prefix);
+  const std::string expected_metric = std::string(metric_name) + "=";
   std::string line;
   while (std::getline(in, line)) {
-    if (line.rfind("some", 0) != 0) {
+    if (line.rfind(expected_prefix, 0) != 0) {
       continue;
     }
 
     std::istringstream iss(line);
     std::string token;
     while (iss >> token) {
-      if (token.rfind("avg10=", 0) == 0) {
+      if (token.rfind(expected_metric, 0) == 0) {
         try {
-          return std::stod(token.substr(6));
+          return std::stod(token.substr(expected_metric.size()));
         } catch (...) {
           return 0.0;
         }

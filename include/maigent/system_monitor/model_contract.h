@@ -12,12 +12,30 @@ namespace maigent {
 struct SystemMonitorHostInput {
   int64_t ts_ms = 0;
   double cpu_usage_pct = 0.0;
+  double cpu_usage_delta = 0.0;
+  double cpu_usage_ema_short = 0.0;
+  double cpu_usage_ema_long = 0.0;
+  int logical_cpu_count = 0;
   int64_t mem_total_mb = 0;
   int64_t mem_available_mb = 0;
+  int64_t mem_available_delta_mb = 0;
+  int64_t swap_total_mb = 0;
+  int64_t swap_free_mb = 0;
   double load1 = 0.0;
+  double load_per_cpu = 0.0;
+  double mem_available_ratio = 0.0;
+  double mem_used_ratio = 0.0;
+  double swap_used_ratio = 0.0;
   double psi_cpu_some = 0.0;
   double psi_mem_some = 0.0;
   double psi_io_some = 0.0;
+  double cpu_some_avg60 = 0.0;
+  double mem_some_avg60 = 0.0;
+  double io_some_avg60 = 0.0;
+  double mem_full_avg10 = 0.0;
+  double mem_full_avg60 = 0.0;
+  double io_full_avg10 = 0.0;
+  double io_full_avg60 = 0.0;
 };
 
 struct SystemMonitorPressureHistorySample {

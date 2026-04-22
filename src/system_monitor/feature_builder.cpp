@@ -135,7 +135,7 @@ SystemMonitorModelInput SystemMonitorFeatureBuilder::BuildModelInput(
         const double interval_sec =
             static_cast<double>(snapshot_ts_ms - state.prev_ts_ms) / 1000.0;
         if (interval_sec > 0.0) {
-          model_target.cpu_usage_delta =
+          model_target.cpu_intensity =
               std::max(0.0, raw_cpu_delta_seconds) / interval_sec;
         }
       }

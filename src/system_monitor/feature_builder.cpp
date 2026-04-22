@@ -99,6 +99,7 @@ SystemMonitorModelInput SystemMonitorFeatureBuilder::BuildModelInput(
   host_state_.prev_mem_available_mb = raw_snapshot.host.mem_available_mb;
 
   out.targets.reserve(raw_snapshot.targets.size());
+  const int64_t snapshot_ts_ms = raw_snapshot.host.ts_ms;
   std::unordered_set<std::string> seen_target_ids;
   seen_target_ids.reserve(raw_snapshot.targets.size());
   for (const auto& target : raw_snapshot.targets) {
@@ -128,13 +129,37 @@ SystemMonitorModelInput SystemMonitorFeatureBuilder::BuildModelInput(
     }
 
     if (state.initialized) {
-      model_target.cpu_usage_delta = target.cpu_usage - state.prev_cpu_usage;
+      const double raw_cpu_delta_seconds =
+          target.cpu_usage - state.prev_cpu_usage;
+      if (state.prev_ts_ms > 0 && snapshot_ts_ms > state.prev_ts_ms) {
+        const double interval_sec =
+            static_cast<double>(snapshot_ts_ms - state.prev_ts_ms) / 1000.0;
+        if (interval_sec > 0.0) {
+          model_target.cpu_usage_delta =
+              std::max(0.0, raw_cpu_delta_seconds) / interval_sec;
+        }
+      }
+
       model_target.memory_delta_mb =
           target.memory_current_mb - state.prev_memory_current_mb;
       model_target.memory_events_high_delta = std::max<int64_t>(
           0, target.memory_events_high - state.prev_memory_events_high);
       model_target.memory_events_oom_delta = std::max<int64_t>(
           0, target.memory_events_oom - state.prev_memory_events_oom);
+
+      const int64_t delta_nr_periods =
+          target.cpu_nr_periods - state.prev_cpu_nr_periods;
+      const int64_t delta_nr_throttled =
+          target.cpu_nr_throttled - state.prev_cpu_nr_throttled;
+      if (delta_nr_periods > 0 && delta_nr_throttled >= 0) {
+        model_target.cpu_throttled_ratio = ClampRatio(
+            static_cast<double>(delta_nr_throttled) /
+            static_cast<double>(delta_nr_periods));
+      } else {
+        model_target.cpu_throttled_ratio = ClampRatio(target.cpu_throttled_ratio);
+      }
+    } else {
+      model_target.cpu_throttled_ratio = ClampRatio(target.cpu_throttled_ratio);
     }
 
     if (raw_snapshot.host.mem_total_mb > 0) {
@@ -145,13 +170,15 @@ SystemMonitorModelInput SystemMonitorFeatureBuilder::BuildModelInput(
     model_target.age_sec = std::max<double>(
         0.0, static_cast<double>(raw_snapshot.host.ts_ms - state.first_seen_ts_ms) /
                  1000.0);
-    model_target.cpu_throttled_ratio = ClampRatio(target.cpu_throttled_ratio);
 
     target_classifier_.Classify(&model_target);
     out.targets.push_back(std::move(model_target));
 
     state.initialized = true;
+    state.prev_ts_ms = snapshot_ts_ms;
     state.prev_cpu_usage = target.cpu_usage;
+    state.prev_cpu_nr_periods = target.cpu_nr_periods;
+    state.prev_cpu_nr_throttled = target.cpu_nr_throttled;
     state.prev_memory_current_mb = target.memory_current_mb;
     state.prev_memory_events_high = target.memory_events_high;
     state.prev_memory_events_oom = target.memory_events_oom;

@@ -55,6 +55,7 @@ struct UnifiedTarget {
   double memory_pressure = 0.0;
   double io_pressure = 0.0;
 
+  // Average CPU intensity over last sampling interval in cores (cpu-seconds/second).
   double cpu_usage_delta = 0.0;
   double memory_delta_mb = 0.0;
   double memory_ratio_of_host = 0.0;

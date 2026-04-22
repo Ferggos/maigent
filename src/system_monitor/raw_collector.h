@@ -31,6 +31,8 @@ struct SystemMonitorTargetRawState {
   std::string task_class;
   int priority = 0;
   double cpu_usage = 0.0;
+  int64_t cpu_nr_periods = 0;
+  int64_t cpu_nr_throttled = 0;
   double cpu_throttled_ratio = 0.0;
   double memory_current_mb = 0.0;
   int64_t memory_events_high = 0;

@@ -30,7 +30,10 @@ class SystemMonitorFeatureBuilder {
   struct TargetFeatureState {
     int64_t first_seen_ts_ms = 0;
     bool initialized = false;
+    int64_t prev_ts_ms = 0;
     double prev_cpu_usage = 0.0;
+    int64_t prev_cpu_nr_periods = 0;
+    int64_t prev_cpu_nr_throttled = 0;
     double prev_memory_current_mb = 0.0;
     int64_t prev_memory_events_high = 0;
     int64_t prev_memory_events_oom = 0;

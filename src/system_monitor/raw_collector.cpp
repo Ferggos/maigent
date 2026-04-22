@@ -162,6 +162,8 @@ SystemMonitorTargetRawState BuildManagedTaskTarget(
     const std::filesystem::path cg = cgroup_root / task.cgroup_path;
     const CpuStatSample cpu_stat = ReadCpuStatSample(cg / "cpu.stat");
     out.cpu_usage = cpu_stat.usage_seconds;
+    out.cpu_nr_periods = cpu_stat.nr_periods;
+    out.cpu_nr_throttled = cpu_stat.nr_throttled;
     if (cpu_stat.nr_periods > 0) {
       out.cpu_throttled_ratio = std::clamp(
           static_cast<double>(cpu_stat.nr_throttled) /
@@ -202,6 +204,8 @@ SystemMonitorTargetRawState BuildExternalGroupTarget(
       static_cast<double>(ReadIntFile(cg / "memory.current")) / (1024.0 * 1024.0);
   const CpuStatSample cpu_stat = ReadCpuStatSample(cg / "cpu.stat");
   out.cpu_usage = cpu_stat.usage_seconds;
+  out.cpu_nr_periods = cpu_stat.nr_periods;
+  out.cpu_nr_throttled = cpu_stat.nr_throttled;
   if (cpu_stat.nr_periods > 0) {
     out.cpu_throttled_ratio = std::clamp(
         static_cast<double>(cpu_stat.nr_throttled) /

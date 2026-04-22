@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
       const maigent::PlannerModelOutput model_output =
           planner_model.Evaluate(model_input);
       const auto runtime_actions =
-          maigent::ToRuntimeControlActions(model_output);
+          maigent::ToRuntimeControlActions(model_output, model_input.targets);
       if (!runtime_actions.empty()) {
         for (const auto& action : runtime_actions) {
           dispatch_action(action, maigent::MakeTraceId());

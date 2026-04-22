@@ -63,11 +63,6 @@ enum class PlannerInterventionType {
 
 struct PlannerDecisionTarget {
   std::string target_id;
-  TargetKind target_kind = TargetKind::kUnspecified;
-  std::string task_id;
-  std::string owner_executor_id;
-  int pid = 0;
-  std::string cgroup_path;
 };
 
 struct PlannerIntervention {

@@ -53,11 +53,6 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
 
     PlannerIntervention intervention;
     intervention.target.target_id = target->target_id;
-    intervention.target.target_kind = target->kind;
-    intervention.target.task_id = target->task_id;
-    intervention.target.owner_executor_id = target->owner_executor_id;
-    intervention.target.pid = target->pid;
-    intervention.target.cgroup_path = target->cgroup_path;
     intervention.intervention_type = PlannerInterventionType::kDeprioritize;
     intervention.numeric_params["nice"] = 15.0;
     intervention.rationale = "heuristic policy: high pressure on managed task";
@@ -72,11 +67,6 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
 
     PlannerIntervention intervention;
     intervention.target.target_id = target->target_id;
-    intervention.target.target_kind = target->kind;
-    intervention.target.task_id = target->task_id;
-    intervention.target.owner_executor_id = target->owner_executor_id;
-    intervention.target.pid = target->pid;
-    intervention.target.cgroup_path = target->cgroup_path;
 
     if (!target->cgroup_path.empty()) {
       intervention.intervention_type = PlannerInterventionType::kLimitCpuShare;

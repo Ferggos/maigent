@@ -81,6 +81,7 @@ target_compile_features(system_monitor_core PUBLIC cxx_std_20)
 
 add_library(planner_core STATIC
   src/planner/model_contract.cpp
+  src/planner/target_candidate_filter.cpp
   src/planner/runtime_command_mapper.cpp
   src/planner/policy_engine_heuristic.cpp
 )

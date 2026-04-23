@@ -1,6 +1,7 @@
 #include "maigent/planner/model_contract.h"
 
 #include "maigent/common/target_model_proto.h"
+#include "maigent/planner/target_candidate_filter.h"
 
 namespace maigent {
 
@@ -37,10 +38,13 @@ PlannerModelInput ToPlannerModelInput(const PressureState& pressure,
   out.capacity.mem_allocatable_mb = capacity.mem_allocatable_mb();
   out.capacity.max_managed_tasks = capacity.max_managed_tasks();
 
-  out.targets.reserve(targets.targets_size());
+  std::vector<UnifiedTarget> all_targets;
+  all_targets.reserve(targets.targets_size());
   for (const auto& target : targets.targets()) {
-    out.targets.push_back(TargetFromProto(target));
+    all_targets.push_back(TargetFromProto(target));
   }
+  static const PlannerTargetCandidateFilter kCandidateFilter;
+  out.targets = kCandidateFilter.BuildCandidates(all_targets);
 
   return out;
 }

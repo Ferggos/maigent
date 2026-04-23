@@ -17,9 +17,16 @@ struct TargetFeatureSummary {
   int64_t memory_events_oom_delta = 0;
 };
 
+bool IncludeTargetInBaselineSummary(const UnifiedTarget& target) {
+  return target.source == TargetSource::kManagedTask && !target.is_protected;
+}
+
 TargetFeatureSummary SummarizeTargets(const std::vector<UnifiedTarget>& targets) {
   TargetFeatureSummary out;
   for (const auto& target : targets) {
+    if (!IncludeTargetInBaselineSummary(target)) {
+      continue;
+    }
     out.max_cpu_intensity = std::max(out.max_cpu_intensity, target.cpu_intensity);
     if (target.memory_delta_mb > 0.0) {
       out.total_positive_memory_delta_mb += target.memory_delta_mb;

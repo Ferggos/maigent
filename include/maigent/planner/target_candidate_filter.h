@@ -12,6 +12,7 @@ struct PlannerTargetCandidateFilterConfig {
   size_t external_top_k_memory = 3;
   size_t external_top_k_pressure = 3;
   size_t external_max_candidates = 8;
+  bool include_external_candidates = false;
 };
 
 class PlannerTargetCandidateFilter {

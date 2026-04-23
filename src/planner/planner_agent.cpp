@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -24,6 +25,11 @@ std::atomic<bool> g_stop{false};
 
 void HandleSignal(int) { g_stop.store(true); }
 
+std::string ActionFailureKey(const std::string& target_id,
+                             maigent::ControlActionType action_type) {
+  return target_id + "#" + std::to_string(static_cast<int>(action_type));
+}
+
 struct ActiveTask {
   std::string task_id;
   std::string executor_id;
@@ -37,6 +43,7 @@ struct PlannerState {
   maigent::CapacityState capacity;
   maigent::TargetsState targets;
   std::unordered_map<std::string, ActiveTask> active_tasks;
+  std::unordered_map<std::string, int64_t> failed_action_backoff_until_ms;
   int64_t last_action_ms = 0;
 };
 
@@ -53,6 +60,11 @@ int main(int argc, char** argv) {
   const int max_actions = maigent::GetFlagInt(argc, argv, "--max-actions", 2);
   const int64_t cooldown_ms =
       maigent::GetFlagInt64(argc, argv, "--cooldown-ms", 1000);
+  const int sustained_high_cycles =
+      std::max(1, maigent::GetFlagInt(argc, argv, "--sustained-high-cycles", 3));
+  const int64_t action_failure_backoff_ms =
+      std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--action-failure-backoff-ms",
+                                                 15000));
 
   maigent::AgentLogger log(agent_id, "logs/planner.log");
 
@@ -157,6 +169,51 @@ int main(int argc, char** argv) {
     st.targets = env.state().targets_state();
   });
 
+  auto on_control_result = [&](const maigent::NatsMessage& msg) {
+    maigent::Envelope env;
+    if (!maigent::ParseEnvelope(msg.data.data(), static_cast<int>(msg.data.size()),
+                                &env) ||
+        !env.has_event() || !env.event().has_actuator_result()) {
+      return;
+    }
+    if (!env.has_header() || env.header().message_category() != maigent::EVENT) {
+      return;
+    }
+
+    const auto kind = env.header().message_kind();
+    const bool is_failure = kind == maigent::MK_ACTUATOR_FAILED ||
+                            kind == maigent::MK_CONTROL_FAILED;
+    const bool is_success = kind == maigent::MK_ACTUATOR_APPLIED ||
+                            kind == maigent::MK_CONTROL_APPLIED;
+    if (!is_failure && !is_success) {
+      return;
+    }
+
+    const auto& result = env.event().actuator_result();
+    if (result.target_id().empty() ||
+        result.action_type() == maigent::CONTROL_ACTION_UNSPECIFIED) {
+      return;
+    }
+
+    const int64_t event_ts_ms =
+        result.ts_ms() > 0 ? result.ts_ms() : maigent::NowMs();
+    const std::string key =
+        ActionFailureKey(result.target_id(), result.action_type());
+    std::lock_guard<std::mutex> lock(mu);
+    if (is_failure) {
+      const int64_t until_ms = event_ts_ms + action_failure_backoff_ms;
+      auto& slot = st.failed_action_backoff_until_ms[key];
+      slot = std::max(slot, until_ms);
+    } else {
+      st.failed_action_backoff_until_ms.erase(key);
+    }
+  };
+
+  nats.Subscribe(maigent::kSubjectEvtActuatorApplied, on_control_result);
+  nats.Subscribe(maigent::kSubjectEvtActuatorFailed, on_control_result);
+  nats.Subscribe(maigent::kSubjectEvtControlApplied, on_control_result);
+  nats.Subscribe(maigent::kSubjectEvtControlFailed, on_control_result);
+
   auto dispatch_action = [&](const maigent::ControlAction& action,
                              const std::string& trace_id) {
     maigent::Envelope env;
@@ -193,6 +250,9 @@ int main(int argc, char** argv) {
 
   log.Info("started");
 
+  int64_t last_pressure_ts_ms = 0;
+  int consecutive_high_pressure = 0;
+
   while (!g_stop.load()) {
     maigent::PressureState pressure;
     maigent::ForecastState forecast;
@@ -212,7 +272,22 @@ int main(int argc, char** argv) {
     }
 
     const int64_t now = maigent::NowMs();
-    if (pressure.ts_ms() > 0 && now - last_action_ms >= cooldown_ms) {
+    if (pressure.ts_ms() > 0 && pressure.ts_ms() != last_pressure_ts_ms) {
+      last_pressure_ts_ms = pressure.ts_ms();
+      if (pressure.risk_level() == maigent::RISK_HIGH) {
+        ++consecutive_high_pressure;
+      } else {
+        consecutive_high_pressure = 0;
+      }
+    }
+    const bool sustained_high =
+        consecutive_high_pressure >= sustained_high_cycles;
+    const bool should_attempt_intervention =
+        pressure.risk_level() == maigent::RISK_HIGH &&
+        (sustained_high || forecast.risk_level() == maigent::RISK_HIGH);
+
+    if (should_attempt_intervention && pressure.ts_ms() > last_action_ms &&
+        now - last_action_ms >= cooldown_ms) {
       const maigent::PlannerModelInput model_input =
           maigent::ToPlannerModelInput(pressure, forecast, capacity, targets,
                                        active_tasks_count);
@@ -226,8 +301,39 @@ int main(int argc, char** argv) {
                  std::to_string(model_output.interventions.size() -
                                 runtime_actions.size()));
       }
-      if (!runtime_actions.empty()) {
+      std::vector<maigent::ControlAction> dispatchable_actions;
+      dispatchable_actions.reserve(runtime_actions.size());
+      int dropped_due_backoff = 0;
+      {
+        std::lock_guard<std::mutex> lock(mu);
+        for (auto it = st.failed_action_backoff_until_ms.begin();
+             it != st.failed_action_backoff_until_ms.end();) {
+          if (it->second <= now) {
+            it = st.failed_action_backoff_until_ms.erase(it);
+          } else {
+            ++it;
+          }
+        }
+
         for (const auto& action : runtime_actions) {
+          const std::string key =
+              ActionFailureKey(action.target_id(), action.action_type());
+          const auto it = st.failed_action_backoff_until_ms.find(key);
+          if (it != st.failed_action_backoff_until_ms.end() && it->second > now) {
+            ++dropped_due_backoff;
+            continue;
+          }
+          dispatchable_actions.push_back(action);
+        }
+      }
+
+      if (dropped_due_backoff > 0) {
+        log.Warn("suppressed repeated failing actions by backoff dropped=" +
+                 std::to_string(dropped_due_backoff));
+      }
+
+      if (!dispatchable_actions.empty()) {
+        for (const auto& action : dispatchable_actions) {
           dispatch_action(action, maigent::MakeTraceId());
         }
         std::lock_guard<std::mutex> lock(mu);

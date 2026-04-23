@@ -177,6 +177,9 @@ std::vector<UnifiedTarget> PlannerTargetCandidateFilter::BuildCandidates(
       managed_targets.push_back(target);
       continue;
     }
+    if (!config_.include_external_candidates) {
+      continue;
+    }
     if (!IsExternalTarget(target)) {
       continue;
     }

@@ -337,6 +337,13 @@ message TargetInfo {
   double cpu_pressure = 13;
   double memory_pressure = 14;
   double io_pressure = 15;
+  double cpu_intensity = 16;
+  double memory_delta_mb = 17;
+  double memory_ratio_of_host = 18;
+  double age_sec = 19;
+  double cpu_throttled_ratio = 20;
+  int64 memory_events_high_delta = 21;
+  int64 memory_events_oom_delta = 22;
 }
 
 message TargetsState {

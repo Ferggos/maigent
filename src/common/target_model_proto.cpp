@@ -137,6 +137,13 @@ UnifiedTarget TargetFromProto(const TargetInfo& proto_target) {
   target.cpu_pressure = proto_target.cpu_pressure();
   target.memory_pressure = proto_target.memory_pressure();
   target.io_pressure = proto_target.io_pressure();
+  target.cpu_intensity = proto_target.cpu_intensity();
+  target.memory_delta_mb = proto_target.memory_delta_mb();
+  target.memory_ratio_of_host = proto_target.memory_ratio_of_host();
+  target.age_sec = proto_target.age_sec();
+  target.cpu_throttled_ratio = proto_target.cpu_throttled_ratio();
+  target.memory_events_high_delta = proto_target.memory_events_high_delta();
+  target.memory_events_oom_delta = proto_target.memory_events_oom_delta();
   return target;
 }
 
@@ -159,6 +166,13 @@ TargetInfo ToProtoTargetInfo(const UnifiedTarget& target) {
   out.set_cpu_pressure(target.cpu_pressure);
   out.set_memory_pressure(target.memory_pressure);
   out.set_io_pressure(target.io_pressure);
+  out.set_cpu_intensity(target.cpu_intensity);
+  out.set_memory_delta_mb(target.memory_delta_mb);
+  out.set_memory_ratio_of_host(target.memory_ratio_of_host);
+  out.set_age_sec(target.age_sec);
+  out.set_cpu_throttled_ratio(target.cpu_throttled_ratio);
+  out.set_memory_events_high_delta(target.memory_events_high_delta);
+  out.set_memory_events_oom_delta(target.memory_events_oom_delta);
   return out;
 }
 

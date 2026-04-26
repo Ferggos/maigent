@@ -291,15 +291,54 @@ const std::vector<PlannerInterventionType>& ActionLadder(PlannerStrategy strateg
   }
 }
 
+bool IsSevereMemoryState(const PlannerModelInput& input,
+                         const UnifiedTarget& target,
+                         PlannerStrategy strategy) {
+  if (strategy == PlannerStrategy::kEmergency) {
+    return true;
+  }
+  if (input.pressure.risk_level != RISK_HIGH) {
+    return false;
+  }
+  if (input.forecast.risk_level == RISK_HIGH ||
+      input.forecast.overload_probability >= 0.80) {
+    return true;
+  }
+  if (input.pressure.mem_available_mb <= 1024 ||
+      input.forecast.predicted_mem_available_mb <= 1024) {
+    return true;
+  }
+  if (input.pressure.memory_pressure_some >= 0.80) {
+    return true;
+  }
+  if (target.memory_events_oom_delta > 0 || target.memory_events_high_delta > 0) {
+    return true;
+  }
+  if (target.memory_ratio_of_host >= 0.08 || target.memory_delta_mb >= 128.0) {
+    return true;
+  }
+  return false;
+}
+
 std::optional<PlannerInterventionType> PickIntervention(
-    const UnifiedTarget& target, PlannerStrategy strategy, bool memory_dominant) {
+    const UnifiedTarget& target, const PlannerModelInput& input,
+    PlannerStrategy strategy, bool memory_dominant) {
   const int max_severity = MaxSeverityForTarget(target, strategy);
   if (max_severity <= 0) {
     return std::nullopt;
   }
 
+  const bool severe_memory_state =
+      IsSevereMemoryState(input, target, strategy);
   const auto& ladder = ActionLadder(strategy, memory_dominant);
   for (const auto candidate : ladder) {
+    if (strategy == PlannerStrategy::kRelieveMemory &&
+        !severe_memory_state &&
+        (candidate == PlannerInterventionType::kPause ||
+         candidate == PlannerInterventionType::kLimitMemoryHard ||
+         candidate == PlannerInterventionType::kTerminate)) {
+      continue;
+    }
     if (InterventionSeverity(candidate) > max_severity) {
       continue;
     }
@@ -421,7 +460,7 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
       continue;
     }
     const auto planned_action =
-        PickIntervention(target, strategy, memory_dominant);
+        PickIntervention(target, input, strategy, memory_dominant);
     if (!planned_action.has_value()) {
       continue;
     }

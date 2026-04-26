@@ -30,6 +30,23 @@ std::string ActionFailureKey(const std::string& target_id,
   return target_id + "#" + std::to_string(static_cast<int>(action_type));
 }
 
+bool IsHardControlAction(maigent::ControlActionType action_type) {
+  switch (action_type) {
+    case maigent::FREEZE:
+    case maigent::KILL:
+    case maigent::SET_MEM_MAX:
+    case maigent::SET_CPU_MAX:
+      return true;
+    case maigent::CONTROL_ACTION_UNSPECIFIED:
+    case maigent::RENICE:
+    case maigent::SET_CPU_WEIGHT:
+    case maigent::SET_MEM_HIGH:
+    case maigent::THAW:
+    default:
+      return false;
+  }
+}
+
 struct ActiveTask {
   std::string task_id;
   std::string executor_id;
@@ -44,6 +61,7 @@ struct PlannerState {
   maigent::TargetsState targets;
   std::unordered_map<std::string, ActiveTask> active_tasks;
   std::unordered_map<std::string, int64_t> failed_action_backoff_until_ms;
+  std::unordered_map<std::string, int64_t> hard_action_cooldown_until_ms;
   int64_t last_action_ms = 0;
 };
 
@@ -64,6 +82,9 @@ int main(int argc, char** argv) {
       std::max(1, maigent::GetFlagInt(argc, argv, "--sustained-high-cycles", 3));
   const int64_t action_failure_backoff_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--action-failure-backoff-ms",
+                                                 15000));
+  const int64_t hard_action_cooldown_ms =
+      std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--hard-action-cooldown-ms",
                                                  15000));
 
   maigent::AgentLogger log(agent_id, "logs/planner.log");
@@ -304,12 +325,23 @@ int main(int argc, char** argv) {
       std::vector<maigent::ControlAction> dispatchable_actions;
       dispatchable_actions.reserve(runtime_actions.size());
       int dropped_due_backoff = 0;
+      int dropped_due_hard_cooldown = 0;
+      int dropped_due_hard_cycle_limit = 0;
+      bool hard_action_selected = false;
       {
         std::lock_guard<std::mutex> lock(mu);
         for (auto it = st.failed_action_backoff_until_ms.begin();
              it != st.failed_action_backoff_until_ms.end();) {
           if (it->second <= now) {
             it = st.failed_action_backoff_until_ms.erase(it);
+          } else {
+            ++it;
+          }
+        }
+        for (auto it = st.hard_action_cooldown_until_ms.begin();
+             it != st.hard_action_cooldown_until_ms.end();) {
+          if (it->second <= now) {
+            it = st.hard_action_cooldown_until_ms.erase(it);
           } else {
             ++it;
           }
@@ -323,6 +355,19 @@ int main(int argc, char** argv) {
             ++dropped_due_backoff;
             continue;
           }
+          if (IsHardControlAction(action.action_type())) {
+            const auto hard_it = st.hard_action_cooldown_until_ms.find(key);
+            if (hard_it != st.hard_action_cooldown_until_ms.end() &&
+                hard_it->second > now) {
+              ++dropped_due_hard_cooldown;
+              continue;
+            }
+            if (hard_action_selected) {
+              ++dropped_due_hard_cycle_limit;
+              continue;
+            }
+            hard_action_selected = true;
+          }
           dispatchable_actions.push_back(action);
         }
       }
@@ -331,12 +376,31 @@ int main(int argc, char** argv) {
         log.Warn("suppressed repeated failing actions by backoff dropped=" +
                  std::to_string(dropped_due_backoff));
       }
+      if (dropped_due_hard_cooldown > 0) {
+        log.Warn("suppressed repeated hard actions by cooldown dropped=" +
+                 std::to_string(dropped_due_hard_cooldown));
+      }
+      if (dropped_due_hard_cycle_limit > 0) {
+        log.Warn("suppressed extra hard actions in single cycle dropped=" +
+                 std::to_string(dropped_due_hard_cycle_limit));
+      }
 
       if (!dispatchable_actions.empty()) {
+        std::vector<std::string> dispatched_hard_keys;
+        dispatched_hard_keys.reserve(dispatchable_actions.size());
         for (const auto& action : dispatchable_actions) {
+          if (IsHardControlAction(action.action_type())) {
+            dispatched_hard_keys.push_back(
+                ActionFailureKey(action.target_id(), action.action_type()));
+          }
           dispatch_action(action, maigent::MakeTraceId());
         }
         std::lock_guard<std::mutex> lock(mu);
+        const int64_t hard_until = now + hard_action_cooldown_ms;
+        for (const auto& key : dispatched_hard_keys) {
+          auto& slot = st.hard_action_cooldown_until_ms[key];
+          slot = std::max(slot, hard_until);
+        }
         st.last_action_ms = now;
       }
     }

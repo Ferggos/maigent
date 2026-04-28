@@ -6,6 +6,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "maigent.pb.h"
 #include "maigent/common/agent_lifecycle.h"
@@ -47,6 +48,52 @@ bool IsHardControlAction(maigent::ControlActionType action_type) {
   }
 }
 
+bool SupportsTargetAction(const maigent::UnifiedTarget& target,
+                          maigent::TargetAction action) {
+  return std::find(target.allowed_actions.begin(), target.allowed_actions.end(),
+                   action) != target.allowed_actions.end();
+}
+
+bool IsManagedTarget(const maigent::UnifiedTarget& target) {
+  return target.source == maigent::TargetSource::kManagedTask;
+}
+
+bool IsManagedTaskRouteAction(const maigent::ControlAction& action) {
+  return action.target_type() == maigent::TARGET_TASK &&
+         !action.task_id().empty() && !action.executor_id().empty();
+}
+
+bool IsManagedThawCandidate(const maigent::UnifiedTarget& target) {
+  return IsManagedTarget(target) && !target.target_id.empty() &&
+         !target.task_id.empty() && !target.owner_executor_id.empty() &&
+         SupportsTargetAction(target, maigent::TargetAction::kThaw);
+}
+
+bool BuildManagedThawAction(const maigent::UnifiedTarget& target, int64_t now,
+                            maigent::ControlAction* out) {
+  if (out == nullptr || !IsManagedThawCandidate(target)) {
+    return false;
+  }
+
+  out->Clear();
+  out->set_target_type(maigent::TARGET_TASK);
+  out->set_target_id(target.target_id);
+  out->set_task_id(target.task_id);
+  out->set_executor_id(target.owner_executor_id);
+  out->set_pid(target.pid);
+  out->set_action_type(maigent::THAW);
+  out->set_reason("planner recovery thaw after stabilized pressure");
+  out->set_policy_id("planner_recovery_v1.thaw");
+  out->set_ts_ms(now);
+  return true;
+}
+
+struct FrozenManagedTarget {
+  int64_t frozen_since_ms = 0;
+  int64_t last_seen_ms = 0;
+  int64_t thaw_eligible_after_ms = 0;
+};
+
 struct ActiveTask {
   std::string task_id;
   std::string executor_id;
@@ -62,6 +109,7 @@ struct PlannerState {
   std::unordered_map<std::string, ActiveTask> active_tasks;
   std::unordered_map<std::string, int64_t> failed_action_backoff_until_ms;
   std::unordered_map<std::string, int64_t> hard_action_cooldown_until_ms;
+  std::unordered_map<std::string, FrozenManagedTarget> frozen_managed_targets;
   int64_t last_action_ms = 0;
 };
 
@@ -86,6 +134,11 @@ int main(int argc, char** argv) {
   const int64_t hard_action_cooldown_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--hard-action-cooldown-ms",
                                                  15000));
+  const int64_t min_freeze_duration_ms =
+      std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--min-freeze-duration-ms",
+                                                 15000));
+  const int thaw_stable_cycles =
+      std::max(1, maigent::GetFlagInt(argc, argv, "--thaw-stable-cycles", 2));
 
   maigent::AgentLogger log(agent_id, "logs/planner.log");
 
@@ -225,8 +278,14 @@ int main(int argc, char** argv) {
       const int64_t until_ms = event_ts_ms + action_failure_backoff_ms;
       auto& slot = st.failed_action_backoff_until_ms[key];
       slot = std::max(slot, until_ms);
+      if (result.action_type() == maigent::FREEZE) {
+        st.frozen_managed_targets.erase(result.target_id());
+      }
     } else {
       st.failed_action_backoff_until_ms.erase(key);
+      if (result.action_type() == maigent::THAW) {
+        st.frozen_managed_targets.erase(result.target_id());
+      }
     }
   };
 
@@ -273,6 +332,7 @@ int main(int argc, char** argv) {
 
   int64_t last_pressure_ts_ms = 0;
   int consecutive_high_pressure = 0;
+  int consecutive_non_high_recovery = 0;
 
   while (!g_stop.load()) {
     maigent::PressureState pressure;
@@ -281,6 +341,7 @@ int main(int argc, char** argv) {
     maigent::TargetsState targets;
     int active_tasks_count = 0;
     int64_t last_action_ms = 0;
+    size_t frozen_managed_targets_count = 0;
 
     {
       std::lock_guard<std::mutex> lock(mu);
@@ -290,6 +351,7 @@ int main(int argc, char** argv) {
       targets = st.targets;
       active_tasks_count = static_cast<int>(st.active_tasks.size());
       last_action_ms = st.last_action_ms;
+      frozen_managed_targets_count = st.frozen_managed_targets.size();
     }
 
     const int64_t now = maigent::NowMs();
@@ -300,18 +362,137 @@ int main(int argc, char** argv) {
       } else {
         consecutive_high_pressure = 0;
       }
+      if (pressure.risk_level() != maigent::RISK_HIGH &&
+          forecast.risk_level() != maigent::RISK_HIGH) {
+        ++consecutive_non_high_recovery;
+      } else {
+        consecutive_non_high_recovery = 0;
+      }
     }
     const bool sustained_high =
         consecutive_high_pressure >= sustained_high_cycles;
     const bool should_attempt_intervention =
         pressure.risk_level() == maigent::RISK_HIGH &&
         (sustained_high || forecast.risk_level() == maigent::RISK_HIGH);
+    const bool stable_recovery =
+        pressure.risk_level() != maigent::RISK_HIGH &&
+        forecast.risk_level() != maigent::RISK_HIGH &&
+        consecutive_non_high_recovery >= thaw_stable_cycles;
 
-    if (should_attempt_intervention && pressure.ts_ms() > last_action_ms &&
+    maigent::PlannerModelInput model_input;
+    bool model_input_ready = false;
+    auto ensure_model_input = [&]() {
+      if (!model_input_ready) {
+        model_input = maigent::ToPlannerModelInput(pressure, forecast, capacity,
+                                                   targets, active_tasks_count);
+        model_input_ready = true;
+      }
+    };
+
+    bool thaw_dispatched = false;
+    if (frozen_managed_targets_count > 0) {
+      ensure_model_input();
+
+      std::unordered_map<std::string, const maigent::UnifiedTarget*> managed_targets;
+      managed_targets.reserve(model_input.targets.size());
+      for (const auto& target : model_input.targets) {
+        if (IsManagedTarget(target)) {
+          managed_targets[target.target_id] = &target;
+        }
+      }
+
+      std::string thaw_target_id;
+      {
+        std::lock_guard<std::mutex> lock(mu);
+        for (auto it = st.failed_action_backoff_until_ms.begin();
+             it != st.failed_action_backoff_until_ms.end();) {
+          if (it->second <= now) {
+            it = st.failed_action_backoff_until_ms.erase(it);
+          } else {
+            ++it;
+          }
+        }
+        for (auto it = st.hard_action_cooldown_until_ms.begin();
+             it != st.hard_action_cooldown_until_ms.end();) {
+          if (it->second <= now) {
+            it = st.hard_action_cooldown_until_ms.erase(it);
+          } else {
+            ++it;
+          }
+        }
+
+        for (auto it = st.frozen_managed_targets.begin();
+             it != st.frozen_managed_targets.end();) {
+          const auto target_it = managed_targets.find(it->first);
+          if (target_it == managed_targets.end() ||
+              !IsManagedThawCandidate(*target_it->second)) {
+            it = st.frozen_managed_targets.erase(it);
+            continue;
+          }
+          it->second.last_seen_ms = now;
+          ++it;
+        }
+
+        if (stable_recovery) {
+          for (const auto& [target_id, frozen_state] :
+               st.frozen_managed_targets) {
+            if (now < frozen_state.thaw_eligible_after_ms ||
+                now - frozen_state.frozen_since_ms < min_freeze_duration_ms) {
+              continue;
+            }
+
+            const auto target_it = managed_targets.find(target_id);
+            if (target_it == managed_targets.end()) {
+              continue;
+            }
+            const std::string thaw_key = ActionFailureKey(target_id, maigent::THAW);
+            const auto backoff_it =
+                st.failed_action_backoff_until_ms.find(thaw_key);
+            if (backoff_it != st.failed_action_backoff_until_ms.end() &&
+                backoff_it->second > now) {
+              continue;
+            }
+
+            if (thaw_target_id.empty()) {
+              thaw_target_id = target_id;
+              continue;
+            }
+            const auto prev_it = st.frozen_managed_targets.find(thaw_target_id);
+            if (prev_it == st.frozen_managed_targets.end() ||
+                frozen_state.frozen_since_ms < prev_it->second.frozen_since_ms ||
+                (frozen_state.frozen_since_ms ==
+                     prev_it->second.frozen_since_ms &&
+                 target_id < thaw_target_id)) {
+              thaw_target_id = target_id;
+            }
+          }
+        }
+      }
+
+      if (!thaw_target_id.empty()) {
+        const auto target_it = managed_targets.find(thaw_target_id);
+        maigent::ControlAction thaw_action;
+        if (target_it != managed_targets.end() &&
+            BuildManagedThawAction(*target_it->second, now, &thaw_action)) {
+          dispatch_action(thaw_action, maigent::MakeTraceId());
+          {
+            std::lock_guard<std::mutex> lock(mu);
+            st.frozen_managed_targets.erase(thaw_target_id);
+            const std::string freeze_key =
+                ActionFailureKey(thaw_target_id, maigent::FREEZE);
+            auto& slot = st.hard_action_cooldown_until_ms[freeze_key];
+            slot = std::max(slot, now + hard_action_cooldown_ms);
+            st.last_action_ms = now;
+          }
+          thaw_dispatched = true;
+        }
+      }
+    }
+
+    if (!thaw_dispatched && should_attempt_intervention &&
+        pressure.ts_ms() > last_action_ms &&
         now - last_action_ms >= cooldown_ms) {
-      const maigent::PlannerModelInput model_input =
-          maigent::ToPlannerModelInput(pressure, forecast, capacity, targets,
-                                       active_tasks_count);
+      ensure_model_input();
       const maigent::PlannerModelOutput model_output =
           planner_model.Evaluate(model_input);
       const auto runtime_actions =
@@ -327,6 +508,7 @@ int main(int argc, char** argv) {
       int dropped_due_backoff = 0;
       int dropped_due_hard_cooldown = 0;
       int dropped_due_hard_cycle_limit = 0;
+      int dropped_due_already_frozen = 0;
       bool hard_action_selected = false;
       {
         std::lock_guard<std::mutex> lock(mu);
@@ -353,6 +535,13 @@ int main(int argc, char** argv) {
           const auto it = st.failed_action_backoff_until_ms.find(key);
           if (it != st.failed_action_backoff_until_ms.end() && it->second > now) {
             ++dropped_due_backoff;
+            continue;
+          }
+          if (action.action_type() == maigent::FREEZE &&
+              IsManagedTaskRouteAction(action) &&
+              st.frozen_managed_targets.find(action.target_id()) !=
+                  st.frozen_managed_targets.end()) {
+            ++dropped_due_already_frozen;
             continue;
           }
           if (IsHardControlAction(action.action_type())) {
@@ -384,14 +573,30 @@ int main(int argc, char** argv) {
         log.Warn("suppressed extra hard actions in single cycle dropped=" +
                  std::to_string(dropped_due_hard_cycle_limit));
       }
+      if (dropped_due_already_frozen > 0) {
+        log.Warn("suppressed FREEZE for already frozen managed targets dropped=" +
+                 std::to_string(dropped_due_already_frozen));
+      }
 
       if (!dispatchable_actions.empty()) {
         std::vector<std::string> dispatched_hard_keys;
+        std::vector<std::string> dispatched_managed_freeze_targets;
+        std::vector<std::string> dispatched_managed_thaw_targets;
         dispatched_hard_keys.reserve(dispatchable_actions.size());
+        dispatched_managed_freeze_targets.reserve(dispatchable_actions.size());
+        dispatched_managed_thaw_targets.reserve(dispatchable_actions.size());
         for (const auto& action : dispatchable_actions) {
           if (IsHardControlAction(action.action_type())) {
             dispatched_hard_keys.push_back(
                 ActionFailureKey(action.target_id(), action.action_type()));
+          }
+          if (action.action_type() == maigent::FREEZE &&
+              IsManagedTaskRouteAction(action)) {
+            dispatched_managed_freeze_targets.push_back(action.target_id());
+          }
+          if (action.action_type() == maigent::THAW &&
+              IsManagedTaskRouteAction(action)) {
+            dispatched_managed_thaw_targets.push_back(action.target_id());
           }
           dispatch_action(action, maigent::MakeTraceId());
         }
@@ -399,6 +604,19 @@ int main(int argc, char** argv) {
         const int64_t hard_until = now + hard_action_cooldown_ms;
         for (const auto& key : dispatched_hard_keys) {
           auto& slot = st.hard_action_cooldown_until_ms[key];
+          slot = std::max(slot, hard_until);
+        }
+        for (const auto& target_id : dispatched_managed_freeze_targets) {
+          auto& frozen = st.frozen_managed_targets[target_id];
+          frozen.frozen_since_ms = now;
+          frozen.last_seen_ms = now;
+          frozen.thaw_eligible_after_ms = now + min_freeze_duration_ms;
+        }
+        for (const auto& target_id : dispatched_managed_thaw_targets) {
+          st.frozen_managed_targets.erase(target_id);
+          const std::string freeze_key =
+              ActionFailureKey(target_id, maigent::FREEZE);
+          auto& slot = st.hard_action_cooldown_until_ms[freeze_key];
           slot = std::max(slot, hard_until);
         }
         st.last_action_ms = now;

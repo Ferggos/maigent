@@ -92,6 +92,7 @@ struct FrozenManagedTarget {
   int64_t frozen_since_ms = 0;
   int64_t last_seen_ms = 0;
   int64_t thaw_eligible_after_ms = 0;
+  int64_t thaw_pending_until_ms = 0;
 };
 
 struct ActiveTask {
@@ -139,6 +140,9 @@ int main(int argc, char** argv) {
                                                  15000));
   const int thaw_stable_cycles =
       std::max(1, maigent::GetFlagInt(argc, argv, "--thaw-stable-cycles", 2));
+  const int64_t thaw_retry_backoff_ms =
+      std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--thaw-retry-backoff-ms",
+                                                 8000));
 
   maigent::AgentLogger log(agent_id, "logs/planner.log");
 
@@ -280,6 +284,11 @@ int main(int argc, char** argv) {
       slot = std::max(slot, until_ms);
       if (result.action_type() == maigent::FREEZE) {
         st.frozen_managed_targets.erase(result.target_id());
+      } else if (result.action_type() == maigent::THAW) {
+        auto it = st.frozen_managed_targets.find(result.target_id());
+        if (it != st.frozen_managed_targets.end()) {
+          it->second.thaw_pending_until_ms = event_ts_ms + thaw_retry_backoff_ms;
+        }
       }
     } else {
       st.failed_action_backoff_until_ms.erase(key);
@@ -440,6 +449,9 @@ int main(int argc, char** argv) {
                 now - frozen_state.frozen_since_ms < min_freeze_duration_ms) {
               continue;
             }
+            if (frozen_state.thaw_pending_until_ms > now) {
+              continue;
+            }
 
             const auto target_it = managed_targets.find(target_id);
             if (target_it == managed_targets.end()) {
@@ -477,7 +489,11 @@ int main(int argc, char** argv) {
           dispatch_action(thaw_action, maigent::MakeTraceId());
           {
             std::lock_guard<std::mutex> lock(mu);
-            st.frozen_managed_targets.erase(thaw_target_id);
+            auto frozen_it = st.frozen_managed_targets.find(thaw_target_id);
+            if (frozen_it != st.frozen_managed_targets.end()) {
+              frozen_it->second.thaw_pending_until_ms =
+                  now + thaw_retry_backoff_ms;
+            }
             const std::string freeze_key =
                 ActionFailureKey(thaw_target_id, maigent::FREEZE);
             auto& slot = st.hard_action_cooldown_until_ms[freeze_key];
@@ -613,7 +629,11 @@ int main(int argc, char** argv) {
           frozen.thaw_eligible_after_ms = now + min_freeze_duration_ms;
         }
         for (const auto& target_id : dispatched_managed_thaw_targets) {
-          st.frozen_managed_targets.erase(target_id);
+          auto frozen_it = st.frozen_managed_targets.find(target_id);
+          if (frozen_it != st.frozen_managed_targets.end()) {
+            frozen_it->second.thaw_pending_until_ms =
+                now + thaw_retry_backoff_ms;
+          }
           const std::string freeze_key =
               ActionFailureKey(target_id, maigent::FREEZE);
           auto& slot = st.hard_action_cooldown_until_ms[freeze_key];

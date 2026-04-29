@@ -486,8 +486,10 @@ int main(int argc, char** argv) {
       maigent::GetFlagInt(argc, argv, "--commit-timeout-ms", 1500);
   const int start_timeout_ms =
       maigent::GetFlagInt(argc, argv, "--start-timeout-ms", 3000);
+  // A zero finish timeout disables the execution deadline; terminal executor
+  // events still complete the task normally.
   const int finish_timeout_ms =
-      maigent::GetFlagInt(argc, argv, "--finish-timeout-ms", 10000);
+      maigent::GetFlagInt(argc, argv, "--finish-timeout-ms", 0);
   const int queue_wait_timeout_ms =
       maigent::GetFlagInt(argc, argv, "--queue-wait-timeout-ms", 5000);
   const int queue_retry_interval_ms =
@@ -1388,6 +1390,7 @@ int main(int argc, char** argv) {
           to_process_waiters.push_back(task_id);
           needs_release.push_back(ctx_ptr);
         } else if (ctx.current_state == TaskFsmState::STARTED &&
+                   finish_timeout_ms > 0 &&
                    ctx.started_ts_ms > 0 &&
                    now - ctx.started_ts_ms > finish_timeout_ms) {
           Transition(&ctx, TaskFsmState::TIMEOUT, "finish timeout", &log);

@@ -10,6 +10,7 @@ NATS_PORT="4222"
 NATS_URL="nats://${NATS_HOST}:${NATS_PORT}"
 EXECUTOR_COUNT="${EXECUTOR_COUNT:-2}"
 AUTO_BUILD="${AUTO_BUILD:-1}"
+TASK_FINISH_TIMEOUT_MS="${TASK_FINISH_TIMEOUT_MS:-0}"
 
 mkdir -p "${LOG_DIR}" "${REPORTS_DIR}"
 
@@ -78,7 +79,8 @@ for i in $(seq 1 "${EXECUTOR_COUNT}"); do
   start_agent task_executor_agent --nats "${NATS_URL}" --executor-id "exec-${i}"
 done
 
-start_agent task_manager_agent --nats "${NATS_URL}"
+start_agent task_manager_agent --nats "${NATS_URL}" \
+  --finish-timeout-ms "${TASK_FINISH_TIMEOUT_MS}"
 start_agent metrics_collector_agent --nats "${NATS_URL}" --reports-root "${REPORTS_DIR}"
 
 echo "[run_all] all agents are running"

@@ -40,9 +40,9 @@ int main(int argc, char** argv) {
   const std::string wait_mode_str =
       maigent::GetFlagValue(argc, argv, "--wait-mode", "wait_finish");
   const int submit_timeout_ms =
-      maigent::GetFlagInt(argc, argv, "--submit-timeout-ms", 15000);
+      maigent::GetFlagInt(argc, argv, "--submit-timeout-ms", 90000);
   const int wait_timeout_ms =
-      maigent::GetFlagInt(argc, argv, "--wait-timeout-ms", 10000);
+      maigent::GetFlagInt(argc, argv, "--wait-timeout-ms", 0);
 
   std::vector<std::string> args = maigent::GetMultiFlagValues(argc, argv, "--arg");
   if (!args_str.empty()) {

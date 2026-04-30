@@ -127,12 +127,16 @@ ResourceScores ComputeHostResourceScores(const SystemMonitorHostInput& host) {
               0.12 * mem_some_signal + 0.18 * mem_full_signal);
 
   // IO score: sustained IO PSI with stronger weight for full pressure.
+  // Thresholds are calibrated for a VM environment where the hypervisor's
+  // virtualised storage layer produces a persistent io_full baseline of
+  // ~0.3–2.1 % (avg60) under idle conditions; genuine IO pressure starts
+  // above ~3–8 %.
   const double io_some_signal = std::max(
-      ScoreFromThresholds(host.psi_io_some, 0.4, 1.3),
-      ScoreFromThresholds(host.io_some_avg60, 0.3, 1.0));
+      ScoreFromThresholds(host.psi_io_some, 8.0, 25.0),
+      ScoreFromThresholds(host.io_some_avg60, 3.0, 10.0));
   const double io_full_signal = std::max(
-      ScoreFromThresholds(host.io_full_avg10, 0.05, 0.12),
-      ScoreFromThresholds(host.io_full_avg60, 0.05, 0.12));
+      ScoreFromThresholds(host.io_full_avg10, 8.0, 25.0),
+      ScoreFromThresholds(host.io_full_avg60, 2.5, 7.0));
   out.io = Clamp01(0.38 * io_some_signal + 0.62 * io_full_signal);
 
   std::array<std::pair<ResourceBottleneck, double>, 3> ranked = {
@@ -234,8 +238,8 @@ SystemMonitorForecastOutput PredictForecastHeuristic(
       ScoreFromThresholds(host.mem_some_avg60, 0.3, 0.8),
       ScoreFromThresholds(host.mem_full_avg60, 0.05, 0.10));
   const double io_sustained_score = std::max(
-      ScoreFromThresholds(host.io_some_avg60, 0.3, 1.0),
-      ScoreFromThresholds(host.io_full_avg60, 0.05, 0.12));
+      ScoreFromThresholds(host.io_some_avg60, 3.0, 10.0),
+      ScoreFromThresholds(host.io_full_avg60, 2.5, 7.0));
 
   // t+3 reacts stronger to short trend, t+10 stronger to sustained conditions.
   const double risk_t_plus_3 = Clamp01(

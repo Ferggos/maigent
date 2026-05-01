@@ -93,18 +93,22 @@ ResourceScores ComputeHostResourceScores(const SystemMonitorHostInput& host) {
   ResourceScores out;
 
   // CPU score: current load, short-term trend, per-core pressure and CPU PSI.
+  // PSI CPU some thresholds calibrated for VM: full 8-CPU saturation produces
+  // psi_cpu_some ~0.18–0.32 (avg10) — well below bare-metal overload values.
+  // load_per_cpu thresholds use the slow Linux load-average EWMA: after 25s of
+  // full saturation load1 reaches only ~1.2 on an 8-core VM (load_per_cpu≈0.15).
   const double cpu_usage_signal = ScoreFromThresholds(
       std::max(host.cpu_usage_pct, host.cpu_usage_ema_short), 70.0, 85.0);
   const double cpu_trend_signal = std::max(
       ScoreFromThresholds(std::max(0.0, host.cpu_usage_delta), 8.0, 20.0),
       ScoreFromThresholds(std::max(0.0, host.cpu_usage_ema_short - host.cpu_usage_ema_long),
                           4.0, 12.0));
-  const double load_signal = ScoreFromThresholds(host.load_per_cpu, 0.90, 1.40);
+  const double load_signal = ScoreFromThresholds(host.load_per_cpu, 0.10, 0.50);
   const double cpu_psi_signal = std::max(
-      ScoreFromThresholds(host.psi_cpu_some, 0.4, 1.2),
-      ScoreFromThresholds(host.cpu_some_avg60, 0.25, 0.9));
-  out.cpu = Clamp01(0.42 * cpu_usage_signal + 0.20 * cpu_trend_signal +
-                    0.23 * load_signal + 0.15 * cpu_psi_signal);
+      ScoreFromThresholds(host.psi_cpu_some, 0.05, 0.20),
+      ScoreFromThresholds(host.cpu_some_avg60, 0.05, 0.20));
+  out.cpu = Clamp01(0.42 * cpu_usage_signal + 0.13 * cpu_trend_signal +
+                    0.23 * load_signal + 0.22 * cpu_psi_signal);
 
   // Memory score: availability/headroom, depletion trend, swap and memory PSI.
   const double mem_available_ratio_signal =
@@ -249,7 +253,7 @@ SystemMonitorForecastOutput PredictForecastHeuristic(
   const double risk_t_plus_10 = Clamp01(
       0.45 * current_risk_score + 0.18 * memory_sustained_score +
       0.14 * io_sustained_score +
-      0.13 * ScoreFromThresholds(host.cpu_some_avg60, 0.25, 0.9) +
+      0.13 * ScoreFromThresholds(host.cpu_some_avg60, 0.05, 0.20) +
       0.10 * target_pressure_score);
   const double future_risk_score =
       Clamp01(0.55 * risk_t_plus_3 + 0.45 * risk_t_plus_10);

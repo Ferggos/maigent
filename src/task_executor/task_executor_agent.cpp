@@ -159,6 +159,9 @@ int main(int argc, char** argv) {
     }
   };
 
+  std::vector<std::thread> task_threads;
+  std::mutex task_threads_mu;
+
   nats.QueueSubscribe(maigent::kSubjectCmdTaskExecLaunch, maigent::kTaskExecQueueGroup,
                       [&](const maigent::NatsMessage& msg) {
     maigent::Envelope env;
@@ -222,49 +225,52 @@ int main(int argc, char** argv) {
     log.Info("started task pid=" + std::to_string(pid),
              {env.header().request_id(), task.task_id, task.trace_id});
 
-    std::thread([&, task]() {
-      int status = 0;
-      const pid_t waited = waitpid(task.pid, &status, 0);
+    {
+      std::lock_guard<std::mutex> lk(task_threads_mu);
+      task_threads.push_back(std::thread([&, task]() {
+        int status = 0;
+        const pid_t waited = waitpid(task.pid, &status, 0);
 
-      RunningTask final_task = task;
-      bool success = false;
-      int exit_code = -1;
-      std::string err;
+        RunningTask final_task = task;
+        bool success = false;
+        int exit_code = -1;
+        std::string err;
 
-      if (waited < 0) {
-        err = "waitpid failed";
-      } else if (WIFEXITED(status)) {
-        exit_code = WEXITSTATUS(status);
-        success = (exit_code == 0);
-        if (!success) {
-          err = "process exited non-zero";
+        if (waited < 0) {
+          err = "waitpid failed";
+        } else if (WIFEXITED(status)) {
+          exit_code = WEXITSTATUS(status);
+          success = (exit_code == 0);
+          if (!success) {
+            err = "process exited non-zero";
+          }
+        } else if (WIFSIGNALED(status)) {
+          exit_code = 128 + WTERMSIG(status);
+          err = "process terminated by signal";
+        } else {
+          err = "unknown process status";
         }
-      } else if (WIFSIGNALED(status)) {
-        exit_code = 128 + WTERMSIG(status);
-        err = "process terminated by signal";
-      } else {
-        err = "unknown process status";
-      }
 
-      if (success) {
-        publish_task_event(maigent::kSubjectEvtTaskFinished, final_task,
-                           maigent::TASK_FINISHED, exit_code, "");
-      } else {
-        publish_task_event(maigent::kSubjectEvtTaskFailed, final_task,
-                           maigent::TASK_FAILED, exit_code, err);
-      }
+        if (success) {
+          publish_task_event(maigent::kSubjectEvtTaskFinished, final_task,
+                             maigent::TASK_FINISHED, exit_code, "");
+        } else {
+          publish_task_event(maigent::kSubjectEvtTaskFailed, final_task,
+                             maigent::TASK_FAILED, exit_code, err);
+        }
 
-      release_lease(final_task, "process_done");
+        release_lease(final_task, "process_done");
 
-      {
-        std::lock_guard<std::mutex> lock(mu);
-        running.erase(final_task.task_id);
-      }
+        {
+          std::lock_guard<std::mutex> lock(mu);
+          running.erase(final_task.task_id);
+        }
 
-      log.Info(std::string("task done status=") + (success ? "finished" : "failed") +
-                   " exit_code=" + std::to_string(exit_code),
-               {"", final_task.task_id, final_task.trace_id});
-    }).detach();
+        log.Info(std::string("task done status=") + (success ? "finished" : "failed") +
+                     " exit_code=" + std::to_string(exit_code),
+                 {"", final_task.task_id, final_task.trace_id});
+      }));
+    }
   });
 
   nats.Subscribe(maigent::TaskExecControlSubject(executor_id),
@@ -387,6 +393,13 @@ int main(int argc, char** argv) {
 
   while (!g_stop.load()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(task_threads_mu);
+    for (auto& t : task_threads) {
+      if (t.joinable()) t.join();
+    }
   }
 
   lifecycle.Stop(true);

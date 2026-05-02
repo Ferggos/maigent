@@ -512,6 +512,9 @@ int main(int argc, char** argv) {
   std::unordered_map<std::string, std::string> request_to_task_id;
   QueueManager queue_manager;
 
+  std::vector<std::thread> task_threads;
+  std::mutex task_threads_mu;
+
   maigent::PressureState latest_pressure;
   maigent::ForecastState latest_forecast;
   maigent::CapacityState latest_capacity;
@@ -959,7 +962,11 @@ int main(int argc, char** argv) {
       log.Info("task dequeued for reserve retry task_id=" + to_retry[i]->task_id +
                    " queue_len=" + std::to_string(queue_lens[i]),
                {"", to_retry[i]->task_id, to_retry[i]->trace_id});
-      std::thread([&, ctx = to_retry[i]]() { try_reserve_commit_launch(ctx, true); }).detach();
+      {
+        std::lock_guard<std::mutex> lk(task_threads_mu);
+        task_threads.push_back(
+            std::thread([&, ctx = to_retry[i]]() { try_reserve_commit_launch(ctx, true); }));
+      }
     }
   };
 
@@ -1198,7 +1205,11 @@ int main(int argc, char** argv) {
 
     if (is_new_task) {
       publish_task_submitted(*ctx);
-      std::thread([&, ctx]() { try_reserve_commit_launch(ctx, false); }).detach();
+      {
+        std::lock_guard<std::mutex> lk(task_threads_mu);
+        task_threads.push_back(
+            std::thread([&, ctx]() { try_reserve_commit_launch(ctx, false); }));
+      }
       log.Info("submit accepted async mode=" + std::to_string(wait_mode) +
                    " admission_mode=" +
                    (admission_mode == AdmissionMode::QUEUE ? "queue" : "deny"),
@@ -1449,6 +1460,13 @@ int main(int argc, char** argv) {
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(task_threads_mu);
+    for (auto& t : task_threads) {
+      if (t.joinable()) t.join();
+    }
   }
 
   lifecycle.Stop(true);

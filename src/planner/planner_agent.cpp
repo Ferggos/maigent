@@ -590,8 +590,8 @@ int main(int argc, char** argv) {
                  std::to_string(dropped_due_hard_cycle_limit));
       }
       if (dropped_due_already_frozen > 0) {
-        log.Warn("suppressed FREEZE for already frozen managed targets dropped=" +
-                 std::to_string(dropped_due_already_frozen));
+        log.Debug("suppressed FREEZE for already frozen managed targets dropped=" +
+                  std::to_string(dropped_due_already_frozen));
       }
 
       if (!dispatchable_actions.empty()) {

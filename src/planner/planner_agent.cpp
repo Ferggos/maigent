@@ -17,6 +17,7 @@
 #include "maigent/common/message_helpers.h"
 #include "maigent/common/nats_wrapper.h"
 #include "maigent/common/time_utils.h"
+#include "maigent/planner/planner_config.h"
 #include "maigent/planner/planner_model.h"
 #include "maigent/planner/runtime_command_mapper.h"
 
@@ -124,23 +125,25 @@ int main(int argc, char** argv) {
   const std::string agent_id = "planner-" + maigent::MakeUuid();
   const std::string nats_url =
       maigent::GetFlagValue(argc, argv, "--nats", "nats://127.0.0.1:4222");
-  const int max_actions = maigent::GetFlagInt(argc, argv, "--max-actions", 2);
-  const int64_t cooldown_ms =
-      maigent::GetFlagInt64(argc, argv, "--cooldown-ms", 1000);
-  const int sustained_high_cycles =
+  maigent::PlannerAgentConfig cfg;
+  cfg.max_actions_per_cycle =
+      std::max(1, maigent::GetFlagInt(argc, argv, "--max-actions", 2));
+  cfg.cooldown_ms =
+      std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--cooldown-ms", 1000));
+  cfg.sustained_high_cycles =
       std::max(1, maigent::GetFlagInt(argc, argv, "--sustained-high-cycles", 3));
-  const int64_t action_failure_backoff_ms =
+  cfg.action_failure_backoff_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--action-failure-backoff-ms",
                                                  15000));
-  const int64_t hard_action_cooldown_ms =
+  cfg.hard_action_cooldown_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--hard-action-cooldown-ms",
                                                  15000));
-  const int64_t min_freeze_duration_ms =
+  cfg.min_freeze_duration_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--min-freeze-duration-ms",
                                                  15000));
-  const int thaw_stable_cycles =
+  cfg.thaw_stable_cycles =
       std::max(1, maigent::GetFlagInt(argc, argv, "--thaw-stable-cycles", 2));
-  const int64_t thaw_retry_backoff_ms =
+  cfg.thaw_retry_backoff_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--thaw-retry-backoff-ms",
                                                  8000));
 
@@ -152,7 +155,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  maigent::HeuristicPlannerModel planner_model(max_actions);
+  maigent::HeuristicPlannerModel planner_model(cfg.max_actions_per_cycle);
 
   std::mutex mu;
   PlannerState st;
@@ -279,7 +282,7 @@ int main(int argc, char** argv) {
         ActionFailureKey(result.target_id(), result.action_type());
     std::lock_guard<std::mutex> lock(mu);
     if (is_failure) {
-      const int64_t until_ms = event_ts_ms + action_failure_backoff_ms;
+      const int64_t until_ms = event_ts_ms + cfg.action_failure_backoff_ms;
       auto& slot = st.failed_action_backoff_until_ms[key];
       slot = std::max(slot, until_ms);
       if (result.action_type() == maigent::FREEZE) {
@@ -287,7 +290,7 @@ int main(int argc, char** argv) {
       } else if (result.action_type() == maigent::THAW) {
         auto it = st.frozen_managed_targets.find(result.target_id());
         if (it != st.frozen_managed_targets.end()) {
-          it->second.thaw_pending_until_ms = event_ts_ms + thaw_retry_backoff_ms;
+          it->second.thaw_pending_until_ms = event_ts_ms + cfg.thaw_retry_backoff_ms;
         }
       }
     } else {
@@ -379,14 +382,14 @@ int main(int argc, char** argv) {
       }
     }
     const bool sustained_high =
-        consecutive_high_pressure >= sustained_high_cycles;
+        consecutive_high_pressure >= cfg.sustained_high_cycles;
     const bool should_attempt_intervention =
         pressure.risk_level() == maigent::RISK_HIGH &&
         (sustained_high || forecast.risk_level() == maigent::RISK_HIGH);
     const bool stable_recovery =
         pressure.risk_level() != maigent::RISK_HIGH &&
         forecast.risk_level() != maigent::RISK_HIGH &&
-        consecutive_non_high_recovery >= thaw_stable_cycles;
+        consecutive_non_high_recovery >= cfg.thaw_stable_cycles;
 
     maigent::PlannerModelInput model_input;
     bool model_input_ready = false;
@@ -446,7 +449,7 @@ int main(int argc, char** argv) {
           for (const auto& [target_id, frozen_state] :
                st.frozen_managed_targets) {
             if (now < frozen_state.thaw_eligible_after_ms ||
-                now - frozen_state.frozen_since_ms < min_freeze_duration_ms) {
+                now - frozen_state.frozen_since_ms < cfg.min_freeze_duration_ms) {
               continue;
             }
             if (frozen_state.thaw_pending_until_ms > now) {
@@ -492,12 +495,12 @@ int main(int argc, char** argv) {
             auto frozen_it = st.frozen_managed_targets.find(thaw_target_id);
             if (frozen_it != st.frozen_managed_targets.end()) {
               frozen_it->second.thaw_pending_until_ms =
-                  now + thaw_retry_backoff_ms;
+                  now + cfg.thaw_retry_backoff_ms;
             }
             const std::string freeze_key =
                 ActionFailureKey(thaw_target_id, maigent::FREEZE);
             auto& slot = st.hard_action_cooldown_until_ms[freeze_key];
-            slot = std::max(slot, now + hard_action_cooldown_ms);
+            slot = std::max(slot, now + cfg.hard_action_cooldown_ms);
             st.last_action_ms = now;
           }
           thaw_dispatched = true;
@@ -507,7 +510,7 @@ int main(int argc, char** argv) {
 
     if (!thaw_dispatched && should_attempt_intervention &&
         pressure.ts_ms() > last_action_ms &&
-        now - last_action_ms >= cooldown_ms) {
+        now - last_action_ms >= cfg.cooldown_ms) {
       ensure_model_input();
       const maigent::PlannerModelOutput model_output =
           planner_model.Evaluate(model_input);
@@ -617,7 +620,7 @@ int main(int argc, char** argv) {
           dispatch_action(action, maigent::MakeTraceId());
         }
         std::lock_guard<std::mutex> lock(mu);
-        const int64_t hard_until = now + hard_action_cooldown_ms;
+        const int64_t hard_until = now + cfg.hard_action_cooldown_ms;
         for (const auto& key : dispatched_hard_keys) {
           auto& slot = st.hard_action_cooldown_until_ms[key];
           slot = std::max(slot, hard_until);
@@ -626,13 +629,13 @@ int main(int argc, char** argv) {
           auto& frozen = st.frozen_managed_targets[target_id];
           frozen.frozen_since_ms = now;
           frozen.last_seen_ms = now;
-          frozen.thaw_eligible_after_ms = now + min_freeze_duration_ms;
+          frozen.thaw_eligible_after_ms = now + cfg.min_freeze_duration_ms;
         }
         for (const auto& target_id : dispatched_managed_thaw_targets) {
           auto frozen_it = st.frozen_managed_targets.find(target_id);
           if (frozen_it != st.frozen_managed_targets.end()) {
             frozen_it->second.thaw_pending_until_ms =
-                now + thaw_retry_backoff_ms;
+                now + cfg.thaw_retry_backoff_ms;
           }
           const std::string freeze_key =
               ActionFailureKey(target_id, maigent::FREEZE);

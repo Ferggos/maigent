@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "maigent/common/time_utils.h"
+#include "maigent/system_monitor/scoring_config.h"
 
 namespace maigent {
 
@@ -89,6 +90,8 @@ const char* BottleneckTag(ResourceBottleneck bottleneck) {
   }
 }
 
+const SystemMonitorScoringConfig kCfg;
+
 ResourceScores ComputeHostResourceScores(const SystemMonitorHostInput& host) {
   ResourceScores out;
 
@@ -98,33 +101,41 @@ ResourceScores ComputeHostResourceScores(const SystemMonitorHostInput& host) {
   // load_per_cpu thresholds use the slow Linux load-average EWMA: after 25s of
   // full saturation load1 reaches only ~1.2 on an 8-core VM (load_per_cpu≈0.15).
   const double cpu_usage_signal = ScoreFromThresholds(
-      std::max(host.cpu_usage_pct, host.cpu_usage_ema_short), 70.0, 85.0);
+      std::max(host.cpu_usage_pct, host.cpu_usage_ema_short),
+      kCfg.cpu_usage_moderate, kCfg.cpu_usage_high);
   const double cpu_trend_signal = std::max(
-      ScoreFromThresholds(std::max(0.0, host.cpu_usage_delta), 8.0, 20.0),
+      ScoreFromThresholds(std::max(0.0, host.cpu_usage_delta),
+                          kCfg.cpu_trend_delta_moderate, kCfg.cpu_trend_delta_high),
       ScoreFromThresholds(std::max(0.0, host.cpu_usage_ema_short - host.cpu_usage_ema_long),
-                          4.0, 12.0));
-  const double load_signal = ScoreFromThresholds(host.load_per_cpu, 0.10, 0.50);
+                          kCfg.cpu_trend_ema_moderate, kCfg.cpu_trend_ema_high));
+  const double load_signal = ScoreFromThresholds(
+      host.load_per_cpu, kCfg.load_per_cpu_moderate, kCfg.load_per_cpu_high);
   const double cpu_psi_signal = std::max(
-      ScoreFromThresholds(host.psi_cpu_some, 0.05, 0.20),
-      ScoreFromThresholds(host.cpu_some_avg60, 0.05, 0.20));
+      ScoreFromThresholds(host.psi_cpu_some, kCfg.psi_cpu_moderate, kCfg.psi_cpu_high),
+      ScoreFromThresholds(host.cpu_some_avg60, kCfg.psi_cpu_moderate, kCfg.psi_cpu_high));
   out.cpu = Clamp01(0.42 * cpu_usage_signal + 0.13 * cpu_trend_signal +
                     0.23 * load_signal + 0.22 * cpu_psi_signal);
 
   // Memory score: availability/headroom, depletion trend, swap and memory PSI.
   const double mem_available_ratio_signal =
-      ScoreFromThresholds(1.0 - host.mem_available_ratio, 0.84, 0.92);
+      ScoreFromThresholds(1.0 - host.mem_available_ratio,
+                          kCfg.mem_used_ratio_moderate, kCfg.mem_used_ratio_high);
   const double mem_available_abs_signal =
-      LowValueScore(static_cast<double>(host.mem_available_mb), 1536.0, 768.0);
+      LowValueScore(static_cast<double>(host.mem_available_mb),
+                    kCfg.mem_available_moderate_mb, kCfg.mem_available_high_mb);
   const double mem_drop_signal = ScoreFromThresholds(
-      static_cast<double>(std::max<int64_t>(0, -host.mem_available_delta_mb)), 128.0,
-      512.0);
-  const double swap_signal = ScoreFromThresholds(host.swap_used_ratio, 0.40, 0.70);
+      static_cast<double>(std::max<int64_t>(0, -host.mem_available_delta_mb)),
+      kCfg.mem_drop_moderate_mb, kCfg.mem_drop_high_mb);
+  const double swap_signal = ScoreFromThresholds(
+      host.swap_used_ratio, kCfg.swap_moderate, kCfg.swap_high);
   const double mem_some_signal = std::max(
-      ScoreFromThresholds(host.psi_mem_some, 0.3, 1.0),
-      ScoreFromThresholds(host.mem_some_avg60, 0.3, 0.8));
+      ScoreFromThresholds(host.psi_mem_some,
+                          kCfg.psi_mem_some_moderate, kCfg.psi_mem_some_high),
+      ScoreFromThresholds(host.mem_some_avg60,
+                          kCfg.mem_some_avg60_moderate, kCfg.mem_some_avg60_high));
   const double mem_full_signal = std::max(
-      ScoreFromThresholds(host.mem_full_avg10, 0.05, 0.10),
-      ScoreFromThresholds(host.mem_full_avg60, 0.05, 0.10));
+      ScoreFromThresholds(host.mem_full_avg10, kCfg.mem_full_moderate, kCfg.mem_full_high),
+      ScoreFromThresholds(host.mem_full_avg60, kCfg.mem_full_moderate, kCfg.mem_full_high));
   out.memory =
       Clamp01(0.22 * mem_available_ratio_signal + 0.18 * mem_available_abs_signal +
               0.16 * mem_drop_signal + 0.14 * swap_signal +
@@ -136,11 +147,13 @@ ResourceScores ComputeHostResourceScores(const SystemMonitorHostInput& host) {
   // ~0.3–2.1 % (avg60) under idle conditions; genuine IO pressure starts
   // above ~3–8 %.
   const double io_some_signal = std::max(
-      ScoreFromThresholds(host.psi_io_some, 8.0, 25.0),
-      ScoreFromThresholds(host.io_some_avg60, 3.0, 10.0));
+      ScoreFromThresholds(host.psi_io_some, kCfg.io_some_moderate, kCfg.io_some_high),
+      ScoreFromThresholds(host.io_some_avg60,
+                          kCfg.io_some_avg60_moderate, kCfg.io_some_avg60_high));
   const double io_full_signal = std::max(
-      ScoreFromThresholds(host.io_full_avg10, 8.0, 25.0),
-      ScoreFromThresholds(host.io_full_avg60, 2.5, 7.0));
+      ScoreFromThresholds(host.io_full_avg10, kCfg.io_full_moderate, kCfg.io_full_high),
+      ScoreFromThresholds(host.io_full_avg60,
+                          kCfg.io_full_avg60_moderate, kCfg.io_full_avg60_high));
   out.io = Clamp01(0.38 * io_some_signal + 0.62 * io_full_signal);
 
   std::array<std::pair<ResourceBottleneck, double>, 3> ranked = {
@@ -150,9 +163,10 @@ ResourceScores ComputeHostResourceScores(const SystemMonitorHostInput& host) {
   };
   std::sort(ranked.begin(), ranked.end(),
             [](const auto& lhs, const auto& rhs) { return lhs.second > rhs.second; });
-  out.primary = ranked[0].second < 0.20 ? ResourceBottleneck::kNone : ranked[0].first;
-  out.secondary =
-      ranked[1].second < 0.15 ? ResourceBottleneck::kNone : ranked[1].first;
+  out.primary = ranked[0].second < kCfg.bottleneck_primary_min
+                    ? ResourceBottleneck::kNone : ranked[0].first;
+  out.secondary = ranked[1].second < kCfg.bottleneck_secondary_min
+                      ? ResourceBottleneck::kNone : ranked[1].first;
   out.host_risk = Clamp01(0.60 * ranked[0].second + 0.30 * ranked[1].second +
                           0.10 * ranked[2].second);
   return out;
@@ -178,10 +192,10 @@ double ComputeTargetPressureScore(const TargetFeatureSummary& summary) {
 }
 
 RiskLevel RiskLevelFromScore(double risk_score) {
-  if (risk_score >= 0.82) {
+  if (risk_score >= kCfg.risk_high) {
     return RISK_HIGH;
   }
-  if (risk_score >= 0.50) {
+  if (risk_score >= kCfg.risk_med) {
     return RISK_MED;
   }
   return RISK_LOW;
@@ -233,17 +247,22 @@ SystemMonitorForecastOutput PredictForecastHeuristic(
   const double cpu_ema_gap =
       std::max(0.0, host.cpu_usage_ema_short - host.cpu_usage_ema_long);
   const double cpu_trend_score = std::max(
-      ScoreFromThresholds(cpu_delta_up, 8.0, 20.0),
-      ScoreFromThresholds(cpu_ema_gap, 4.0, 12.0));
+      ScoreFromThresholds(cpu_delta_up,
+                          kCfg.cpu_trend_delta_moderate, kCfg.cpu_trend_delta_high),
+      ScoreFromThresholds(cpu_ema_gap,
+                          kCfg.cpu_trend_ema_moderate, kCfg.cpu_trend_ema_high));
   const double memory_drop_score = ScoreFromThresholds(
-      static_cast<double>(std::max<int64_t>(0, -host.mem_available_delta_mb)), 128.0,
-      512.0);
+      static_cast<double>(std::max<int64_t>(0, -host.mem_available_delta_mb)),
+      kCfg.mem_drop_moderate_mb, kCfg.mem_drop_high_mb);
   const double memory_sustained_score = std::max(
-      ScoreFromThresholds(host.mem_some_avg60, 0.3, 0.8),
-      ScoreFromThresholds(host.mem_full_avg60, 0.05, 0.10));
+      ScoreFromThresholds(host.mem_some_avg60,
+                          kCfg.mem_some_avg60_moderate, kCfg.mem_some_avg60_high),
+      ScoreFromThresholds(host.mem_full_avg60, kCfg.mem_full_moderate, kCfg.mem_full_high));
   const double io_sustained_score = std::max(
-      ScoreFromThresholds(host.io_some_avg60, 3.0, 10.0),
-      ScoreFromThresholds(host.io_full_avg60, 2.5, 7.0));
+      ScoreFromThresholds(host.io_some_avg60,
+                          kCfg.io_some_avg60_moderate, kCfg.io_some_avg60_high),
+      ScoreFromThresholds(host.io_full_avg60,
+                          kCfg.io_full_avg60_moderate, kCfg.io_full_avg60_high));
 
   // t+3 reacts stronger to short trend, t+10 stronger to sustained conditions.
   const double risk_t_plus_3 = Clamp01(
@@ -253,7 +272,8 @@ SystemMonitorForecastOutput PredictForecastHeuristic(
   const double risk_t_plus_10 = Clamp01(
       0.45 * current_risk_score + 0.18 * memory_sustained_score +
       0.14 * io_sustained_score +
-      0.13 * ScoreFromThresholds(host.cpu_some_avg60, 0.05, 0.20) +
+      0.13 * ScoreFromThresholds(host.cpu_some_avg60,
+                                 kCfg.psi_cpu_moderate, kCfg.psi_cpu_high) +
       0.10 * target_pressure_score);
   const double future_risk_score =
       Clamp01(0.55 * risk_t_plus_3 + 0.45 * risk_t_plus_10);

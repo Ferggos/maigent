@@ -4,9 +4,13 @@
 #include <optional>
 #include <vector>
 
+#include "maigent/planner/policy_config.h"
+
 namespace maigent {
 
 namespace {
+
+const PlannerPolicyConfig kCfg;
 
 enum class PlannerStrategy {
   kObserve = 0,
@@ -62,18 +66,18 @@ bool IsManagedTask(const UnifiedTarget& target) {
 
 double PriorityPenalty(int priority) {
   if (priority < 0) {
-    return 0.02;
+    return kCfg.priority_penalty_none;
   }
-  if (priority >= 90) {
-    return 0.50;
+  if (priority >= kCfg.priority_critical_bound) {
+    return kCfg.priority_penalty_critical;
   }
-  if (priority >= 70) {
-    return 0.35;
+  if (priority >= kCfg.priority_high_bound) {
+    return kCfg.priority_penalty_high;
   }
-  if (priority >= 50) {
-    return 0.22;
+  if (priority >= kCfg.priority_mid_bound) {
+    return kCfg.priority_penalty_mid;
   }
-  return 0.10;
+  return kCfg.priority_penalty_low;
 }
 
 int InterventionSeverity(PlannerInterventionType type) {
@@ -158,19 +162,24 @@ bool SupportsIntervention(const UnifiedTarget& target,
 double ComputeMemoryTargetScore(const UnifiedTarget& target,
                                 const PlannerModelInput& input,
                                 PlannerStrategy strategy) {
-  const double mem_current_signal =
-      ScoreFromThresholds(target.memory_current_mb, 256.0, 2048.0);
-  const double mem_ratio_signal =
-      ScoreFromThresholds(target.memory_ratio_of_host, 0.03, 0.12);
-  const double mem_growth_signal =
-      ScoreFromThresholds(std::max(0.0, target.memory_delta_mb), 32.0, 256.0);
-  const double mem_pressure_signal =
-      ScoreFromThresholds(target.memory_pressure, 0.2, 0.8);
+  const double mem_current_signal = ScoreFromThresholds(
+      target.memory_current_mb,
+      kCfg.target_mem_current_moderate_mb, kCfg.target_mem_current_high_mb);
+  const double mem_ratio_signal = ScoreFromThresholds(
+      target.memory_ratio_of_host,
+      kCfg.target_mem_ratio_moderate, kCfg.target_mem_ratio_high);
+  const double mem_growth_signal = ScoreFromThresholds(
+      std::max(0.0, target.memory_delta_mb),
+      kCfg.target_mem_growth_moderate_mb, kCfg.target_mem_growth_high_mb);
+  const double mem_pressure_signal = ScoreFromThresholds(
+      target.memory_pressure,
+      kCfg.target_mem_pressure_moderate, kCfg.target_mem_pressure_high);
   const double mem_events_signal = std::max(
       target.memory_events_oom_delta > 0 ? 1.0 : 0.0,
-      ScoreFromThresholds(static_cast<double>(target.memory_events_high_delta), 1.0,
-                          4.0));
-  const double age_signal = ScoreFromThresholds(target.age_sec, 5.0, 30.0);
+      ScoreFromThresholds(static_cast<double>(target.memory_events_high_delta),
+                          kCfg.target_mem_events_moderate, kCfg.target_mem_events_high));
+  const double age_signal = ScoreFromThresholds(
+      target.age_sec, kCfg.target_age_moderate_sec, kCfg.target_age_high_sec);
 
   double capability_bonus = 0.0;
   if (SupportsAction(target, TargetAction::kSetMemHigh)) {
@@ -185,8 +194,9 @@ double ComputeMemoryTargetScore(const UnifiedTarget& target,
                                      ? static_cast<double>(input.capacity.mem_available_mb) /
                                            static_cast<double>(input.capacity.mem_total_mb)
                                      : 0.0),
-                          0.84, 0.92),
-      LowValueScore(static_cast<double>(input.pressure.mem_available_mb), 1536.0, 768.0));
+                          kCfg.host_mem_used_ratio_moderate, kCfg.host_mem_used_ratio_high),
+      LowValueScore(static_cast<double>(input.pressure.mem_available_mb),
+                    kCfg.mem_available_moderate_mb, kCfg.mem_available_high_mb));
   const double emergency_bias = strategy == PlannerStrategy::kEmergency ? 0.08 : 0.0;
 
   return Clamp01(0.24 * mem_current_signal + 0.18 * mem_ratio_signal +
@@ -197,17 +207,22 @@ double ComputeMemoryTargetScore(const UnifiedTarget& target,
 }
 
 double ComputeCpuTargetScore(const UnifiedTarget& target, PlannerStrategy strategy) {
-  const double intensity_signal =
-      ScoreFromThresholds(target.cpu_intensity, 0.30, 1.20);
+  const double intensity_signal = ScoreFromThresholds(
+      target.cpu_intensity,
+      kCfg.target_cpu_intensity_moderate, kCfg.target_cpu_intensity_high);
   const double cpu_lifetime_share =
       target.age_sec > 1.0 ? target.cpu_usage / target.age_sec : target.cpu_intensity;
-  const double cpu_usage_signal =
-      ScoreFromThresholds(std::max(0.0, cpu_lifetime_share), 0.30, 1.00);
-  const double cpu_pressure_signal =
-      ScoreFromThresholds(target.cpu_pressure, 0.20, 0.80);
-  const double throttle_signal =
-      ScoreFromThresholds(target.cpu_throttled_ratio, 0.05, 0.25);
-  const double age_signal = ScoreFromThresholds(target.age_sec, 5.0, 30.0);
+  const double cpu_usage_signal = ScoreFromThresholds(
+      std::max(0.0, cpu_lifetime_share),
+      kCfg.target_cpu_usage_moderate, kCfg.target_cpu_usage_high);
+  const double cpu_pressure_signal = ScoreFromThresholds(
+      target.cpu_pressure,
+      kCfg.target_cpu_pressure_moderate, kCfg.target_cpu_pressure_high);
+  const double throttle_signal = ScoreFromThresholds(
+      target.cpu_throttled_ratio,
+      kCfg.target_cpu_throttle_moderate, kCfg.target_cpu_throttle_high);
+  const double age_signal = ScoreFromThresholds(
+      target.age_sec, kCfg.target_age_moderate_sec, kCfg.target_age_high_sec);
 
   double capability_bonus = 0.0;
   if (SupportsAction(target, TargetAction::kRenice)) {
@@ -244,19 +259,21 @@ PlannerStrategy ChooseStrategy(const PlannerModelInput& input, double cpu_pressu
       break;
     }
   }
-  if (severe_memory_indicator && memory_pressure_score >= 0.60) {
+  if (severe_memory_indicator &&
+      memory_pressure_score >= kCfg.strategy_emergency_memory_min) {
     return PlannerStrategy::kEmergency;
   }
 
   const double cpu_bias = cpu_pressure_score + io_pressure_score * 0.35;
   const double memory_bias = memory_pressure_score + io_pressure_score * 0.15;
-  if (memory_bias >= cpu_bias + 0.08 && memory_bias >= 0.45) {
+  if (memory_bias >= cpu_bias + kCfg.strategy_relieve_memory_bias_gap &&
+      memory_bias >= kCfg.strategy_relieve_bias_min) {
     return PlannerStrategy::kRelieveMemory;
   }
-  if (cpu_bias >= 0.45) {
+  if (cpu_bias >= kCfg.strategy_relieve_bias_min) {
     return PlannerStrategy::kRelieveCpu;
   }
-  if (memory_pressure_score >= 0.45) {
+  if (memory_pressure_score >= kCfg.strategy_relieve_bias_min) {
     return PlannerStrategy::kRelieveMemory;
   }
   return PlannerStrategy::kObserve;
@@ -301,20 +318,21 @@ bool IsSevereMemoryState(const PlannerModelInput& input,
     return false;
   }
   if (input.forecast.risk_level == RISK_HIGH ||
-      input.forecast.overload_probability >= 0.80) {
+      input.forecast.overload_probability >= kCfg.severe_mem_overload_probability) {
     return true;
   }
-  if (input.pressure.mem_available_mb <= 1024 ||
-      input.forecast.predicted_mem_available_mb <= 1024) {
+  if (input.pressure.mem_available_mb <= kCfg.severe_mem_available_mb ||
+      input.forecast.predicted_mem_available_mb <= kCfg.severe_mem_available_mb) {
     return true;
   }
-  if (input.pressure.memory_pressure_some >= 0.80) {
+  if (input.pressure.memory_pressure_some >= kCfg.severe_mem_pressure_some) {
     return true;
   }
   if (target.memory_events_oom_delta > 0 || target.memory_events_high_delta > 0) {
     return true;
   }
-  if (target.memory_ratio_of_host >= 0.08 || target.memory_delta_mb >= 128.0) {
+  if (target.memory_ratio_of_host >= kCfg.severe_mem_target_ratio ||
+      target.memory_delta_mb >= kCfg.severe_mem_target_delta_mb) {
     return true;
   }
   return false;
@@ -428,15 +446,19 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
   const double cpu_pressure_score = std::max(
       ScoreFromThresholds(std::max(input.pressure.cpu_usage_pct,
                                    input.forecast.predicted_cpu_usage_pct),
-                          72.0, 88.0),
-      ScoreFromThresholds(input.pressure.cpu_pressure_some, 0.4, 1.2));
+                          kCfg.cpu_usage_moderate, kCfg.cpu_usage_high),
+      ScoreFromThresholds(input.pressure.cpu_pressure_some,
+                          kCfg.cpu_psi_moderate, kCfg.cpu_psi_high));
   const double memory_pressure_score = std::max(
-      LowValueScore(static_cast<double>(input.pressure.mem_available_mb), 1536.0, 768.0),
-      std::max(ScoreFromThresholds(input.pressure.memory_pressure_some, 0.3, 1.0),
-               LowValueScore(static_cast<double>(input.forecast.predicted_mem_available_mb),
-                             1536.0, 768.0)));
-  const double io_pressure_score =
-      ScoreFromThresholds(input.pressure.io_pressure_some, 0.6, 2.0);
+      LowValueScore(static_cast<double>(input.pressure.mem_available_mb),
+                    kCfg.mem_available_moderate_mb, kCfg.mem_available_high_mb),
+      std::max(
+          ScoreFromThresholds(input.pressure.memory_pressure_some,
+                              kCfg.mem_psi_moderate, kCfg.mem_psi_high),
+          LowValueScore(static_cast<double>(input.forecast.predicted_mem_available_mb),
+                        kCfg.mem_available_moderate_mb, kCfg.mem_available_high_mb)));
+  const double io_pressure_score = ScoreFromThresholds(
+      input.pressure.io_pressure_some, kCfg.io_psi_moderate, kCfg.io_psi_high);
   const PlannerStrategy strategy = ChooseStrategy(
       input, cpu_pressure_score, memory_pressure_score, io_pressure_score);
   out.strategy_id = StrategyId(strategy);
@@ -472,7 +494,7 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
     } else {
       score = ComputeCpuTargetScore(target, strategy);
     }
-    if (score < 0.12) {
+    if (score < kCfg.target_score_min) {
       continue;
     }
     ScoredTarget scored;

@@ -64,6 +64,15 @@ bool IsManagedTask(const UnifiedTarget& target) {
   return target.source == TargetSource::kManagedTask;
 }
 
+bool IsRegisteredExternalProcess(const UnifiedTarget& target) {
+  return target.source == TargetSource::kExternalProcess &&
+         target.kind == TargetKind::kProcess && target.pid > 0 &&
+         target.pid != 1 && target.allow_control && !target.is_protected &&
+         !target.target_id.empty() &&
+         target.target_id.rfind("external_process:", 0) == 0 &&
+         SupportsAction(target, TargetAction::kRenice);
+}
+
 double PriorityPenalty(int priority) {
   if (priority < 0) {
     return kCfg.priority_penalty_none;
@@ -478,11 +487,21 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
   ranked.reserve(input.targets.size());
 
   for (const auto& target : input.targets) {
-    if (target.is_protected || !IsManagedTask(target)) {
+    const bool is_managed_task = IsManagedTask(target);
+    const bool is_external_process = IsRegisteredExternalProcess(target);
+    if (target.is_protected || (!is_managed_task && !is_external_process)) {
       continue;
     }
-    const auto planned_action =
-        PickIntervention(target, input, strategy, memory_dominant);
+
+    std::optional<PlannerInterventionType> planned_action;
+    if (is_external_process) {
+      if (strategy != PlannerStrategy::kRelieveCpu) {
+        continue;
+      }
+      planned_action = PlannerInterventionType::kDeprioritize;
+    } else {
+      planned_action = PickIntervention(target, input, strategy, memory_dominant);
+    }
     if (!planned_action.has_value()) {
       continue;
     }

@@ -14,11 +14,9 @@ bool IsManagedTask(const UnifiedTarget& target) {
   return target.source == TargetSource::kManagedTask;
 }
 
-bool IsExternalTarget(const UnifiedTarget& target) {
-  return target.source == TargetSource::kExternalGroup ||
-         target.source == TargetSource::kExternalProcess ||
-         target.source == TargetSource::kSystemService ||
-         target.source == TargetSource::kUnspecified;
+bool HasAction(const UnifiedTarget& target, TargetAction action) {
+  return std::find(target.allowed_actions.begin(), target.allowed_actions.end(),
+                   action) != target.allowed_actions.end();
 }
 
 bool IsActionRoutable(TargetAction action, const UnifiedTarget& target) {
@@ -49,6 +47,21 @@ bool HasControlRoute(const UnifiedTarget& target) {
     }
   }
   return false;
+}
+
+bool HasRegisteredExternalProcessShape(const UnifiedTarget& target) {
+  return target.source == TargetSource::kExternalProcess &&
+         target.kind == TargetKind::kProcess && target.pid > 0 &&
+         target.pid != 1 && target.allow_control && !target.target_id.empty() &&
+         target.target_id.rfind("external_process:", 0) == 0;
+}
+
+bool IsRegisteredExternalProcessEligible(const UnifiedTarget& target) {
+  if (!HasRegisteredExternalProcessShape(target) || target.is_protected) {
+    return false;
+  }
+  return HasAction(target, TargetAction::kRenice) &&
+         IsActionRoutable(TargetAction::kRenice, target);
 }
 
 bool IsExternalEligible(const UnifiedTarget& target) {
@@ -158,6 +171,15 @@ bool IsExternalLess(const UnifiedTarget& lhs, const UnifiedTarget& rhs) {
   return lhs.target_id < rhs.target_id;
 }
 
+UnifiedTarget ToPlannerEffectiveExternalProcessTarget(
+    const UnifiedTarget& target) {
+  UnifiedTarget out = target;
+  // MVP external process control is intentionally soft-only.
+  out.allowed_actions.clear();
+  out.allowed_actions.push_back(TargetAction::kRenice);
+  return out;
+}
+
 }  // namespace
 
 PlannerTargetCandidateFilter::PlannerTargetCandidateFilter(
@@ -174,19 +196,38 @@ std::vector<UnifiedTarget> PlannerTargetCandidateFilter::BuildCandidates(
 
   for (const auto& target : all_targets) {
     if (IsManagedTask(target)) {
-      managed_targets.push_back(target);
+      if (config_.include_managed_task_candidates) {
+        managed_targets.push_back(target);
+      }
       continue;
     }
-    if (!config_.include_external_candidates) {
+
+    if (target.source == TargetSource::kExternalProcess) {
+      if (!config_.include_registered_external_process_candidates ||
+          !IsRegisteredExternalProcessEligible(target) ||
+          !IsExternalRelevant(target)) {
+        continue;
+      }
+      external_pool.push_back(&target);
       continue;
     }
-    if (!IsExternalTarget(target)) {
+
+    if (target.source == TargetSource::kExternalGroup) {
+      if (!config_.include_external_group_candidates ||
+          !IsExternalEligible(target) || !IsExternalRelevant(target)) {
+        continue;
+      }
+      external_pool.push_back(&target);
       continue;
     }
-    if (!IsExternalEligible(target) || !IsExternalRelevant(target)) {
-      continue;
+
+    if (target.source == TargetSource::kSystemService) {
+      if (!config_.include_system_service_candidates ||
+          !IsExternalEligible(target) || !IsExternalRelevant(target)) {
+        continue;
+      }
+      external_pool.push_back(&target);
     }
-    external_pool.push_back(&target);
   }
 
   std::sort(managed_targets.begin(), managed_targets.end(), IsManagedLess);
@@ -216,7 +257,12 @@ std::vector<UnifiedTarget> PlannerTargetCandidateFilter::BuildCandidates(
   external_targets.reserve(selected.size());
   for (const UnifiedTarget* target : selected) {
     if (target != nullptr) {
-      external_targets.push_back(*target);
+      if (target->source == TargetSource::kExternalProcess) {
+        external_targets.push_back(
+            ToPlannerEffectiveExternalProcessTarget(*target));
+      } else {
+        external_targets.push_back(*target);
+      }
     }
   }
   std::sort(external_targets.begin(), external_targets.end(), IsExternalLess);

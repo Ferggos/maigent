@@ -46,6 +46,7 @@ struct UnifiedTarget {
 
   std::string task_class;
   int priority = 0;
+  bool allow_control = false;
   bool is_protected = false;
   std::vector<TargetAction> allowed_actions;
 

@@ -114,6 +114,7 @@ SystemMonitorModelInput SystemMonitorFeatureBuilder::BuildModelInput(
     model_target.cgroup_path = target.cgroup_path;
     model_target.task_class = target.task_class;
     model_target.priority = target.priority;
+    model_target.allow_control = target.allow_control;
     model_target.cpu_usage = target.cpu_usage;
     model_target.memory_current_mb = target.memory_current_mb;
     model_target.cpu_pressure = target.cpu_pressure;

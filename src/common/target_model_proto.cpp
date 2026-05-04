@@ -126,6 +126,7 @@ UnifiedTarget TargetFromProto(const TargetInfo& proto_target) {
   target.cgroup_path = proto_target.cgroup_path();
   target.task_class = proto_target.task_class();
   target.priority = proto_target.priority();
+  target.allow_control = proto_target.allow_control();
   target.is_protected = proto_target.is_protected();
   target.allowed_actions.reserve(proto_target.allowed_actions_size());
   for (int i = 0; i < proto_target.allowed_actions_size(); ++i) {
@@ -157,6 +158,7 @@ TargetInfo ToProtoTargetInfo(const UnifiedTarget& target) {
   out.set_cgroup_path(target.cgroup_path);
   out.set_task_class(target.task_class);
   out.set_priority(target.priority);
+  out.set_allow_control(target.allow_control);
   out.set_is_protected(target.is_protected);
   for (const auto action : target.allowed_actions) {
     out.add_allowed_actions(ToProtoControlActionType(action));

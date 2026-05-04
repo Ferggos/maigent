@@ -16,6 +16,10 @@ inline constexpr const char* kSubjectCmdLeaseCommit = "msg.command.lease.commit"
 inline constexpr const char* kSubjectCmdLeaseRelease = "msg.command.lease.release";
 inline constexpr const char* kSubjectCmdTaskExecLaunch = "msg.command.taskexec.launch";
 inline constexpr const char* kSubjectCmdActuatorApply = "msg.command.actuator.apply";
+inline constexpr const char* kSubjectCmdExternalProcessRegister =
+    "msg.command.external_process.register";
+inline constexpr const char* kSubjectCmdExternalProcessUnregister =
+    "msg.command.external_process.unregister";
 
 inline constexpr const char* kSubjectEvtTaskSubmitted = "msg.event.task.submitted";
 inline constexpr const char* kSubjectEvtTaskStarted = "msg.event.task.started";

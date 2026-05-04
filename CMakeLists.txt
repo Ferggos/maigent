@@ -117,3 +117,6 @@ target_link_libraries(bench_submitter PRIVATE ma_common)
 
 add_executable(system_status_client tools/system_status_client.cpp)
 target_link_libraries(system_status_client PRIVATE ma_common)
+
+add_executable(external_process_client tools/external_process_client.cpp)
+target_link_libraries(external_process_client PRIVATE ma_common)

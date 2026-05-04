@@ -60,6 +60,10 @@ void HeuristicTargetClassifier::Classify(UnifiedTarget* target) {
   }
 
   if (source == TargetSource::kExternalProcess) {
+    if (!target->allow_control) {
+      target->is_protected = true;
+      return;
+    }
     if (has_pid) {
       AddAction(target, TargetAction::kRenice);
       AddAction(target, TargetAction::kFreeze);

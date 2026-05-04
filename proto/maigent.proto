@@ -58,6 +58,11 @@ enum MessageKind {
 
   MK_BENCH_START = 36;
   MK_BENCH_STOP = 37;
+
+  MK_EXTERNAL_PROCESS_REGISTER = 38;
+  MK_EXTERNAL_PROCESS_UNREGISTER = 39;
+  MK_EXTERNAL_PROCESS_REGISTER_RESULT = 40;
+  MK_EXTERNAL_PROCESS_UNREGISTER_RESULT = 41;
 }
 
 enum SubmitStatus {
@@ -344,6 +349,7 @@ message TargetInfo {
   double cpu_throttled_ratio = 20;
   int64 memory_events_high_delta = 21;
   int64 memory_events_oom_delta = 22;
+  bool allow_control = 23;
 }
 
 message TargetsState {
@@ -438,6 +444,36 @@ message TaskStatusReply {
   string last_reserve_failure_reason = 26;
 }
 
+message ExternalProcessRegister {
+  int32 pid = 1;
+  string label = 2;
+  string external_id = 3;
+  int32 priority = 4;
+  string cgroup_path = 5;
+  bool allow_control = 6;
+}
+
+message ExternalProcessUnregister {
+  string target_id = 1;
+  int32 pid = 2;
+}
+
+message ExternalProcessRegisterResult {
+  bool success = 1;
+  string target_id = 2;
+  int32 pid = 3;
+  string reason = 4;
+  int64 ts_ms = 5;
+}
+
+message ExternalProcessUnregisterResult {
+  bool success = 1;
+  string target_id = 2;
+  int32 pid = 3;
+  string reason = 4;
+  int64 ts_ms = 5;
+}
+
 message CommandMessage {
   oneof payload {
     SubmitTask submit_task = 1;
@@ -448,6 +484,8 @@ message CommandMessage {
     LaunchTask launch_task = 6;
     ControlAction control_action = 7;
     SystemStatusRequest system_status_request = 9;
+    ExternalProcessRegister external_process_register = 10;
+    ExternalProcessUnregister external_process_unregister = 11;
   }
 }
 
@@ -478,6 +516,8 @@ message ServiceMessage {
     SystemStatusReply system_status_reply = 6;
     BenchSession bench_session = 7;
     LeaseDecision lease_decision = 8;
+    ExternalProcessRegisterResult external_process_register_result = 9;
+    ExternalProcessUnregisterResult external_process_unregister_result = 10;
   }
 }
 

@@ -5,6 +5,8 @@
 Tests
 # VsCode
 .vscode
+.agents
+.codex
 
 ### C++ ###
 # Prerequisites

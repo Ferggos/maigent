@@ -92,6 +92,58 @@ const char* BottleneckTag(ResourceBottleneck bottleneck) {
 
 const SystemMonitorScoringConfig kCfg;
 
+bool HasSevereCpuConfirmation(const SystemMonitorHostInput& host) {
+  return host.cpu_usage_pct >= kCfg.cpu_usage_severe_pct ||
+         host.cpu_usage_ema_short >= kCfg.cpu_usage_severe_pct ||
+         host.cpu_usage_ema_long >= kCfg.cpu_usage_severe_pct ||
+         host.psi_cpu_some >= kCfg.cpu_pressure_severe ||
+         host.cpu_some_avg60 >= kCfg.cpu_pressure_severe ||
+         host.load_per_cpu >= kCfg.load_per_cpu_severe;
+}
+
+bool HasSevereMemoryConfirmation(const SystemMonitorHostInput& host) {
+  const bool low_available_ratio =
+      host.mem_total_mb > 0 &&
+      host.mem_available_ratio <= kCfg.mem_available_ratio_severe;
+  const bool low_available_abs =
+      host.mem_available_mb > 0 &&
+      static_cast<double>(host.mem_available_mb) <= kCfg.mem_available_severe_mb;
+  const bool full_pressure =
+      host.mem_full_avg10 >= kCfg.memory_pressure_severe ||
+      host.mem_full_avg60 >= kCfg.memory_pressure_severe;
+  const bool swap_with_pressure =
+      host.swap_used_ratio >= kCfg.swap_used_severe &&
+      (host.psi_mem_some >= kCfg.psi_mem_some_high ||
+       host.mem_some_avg60 >= kCfg.mem_some_avg60_high);
+
+  return low_available_ratio || low_available_abs || full_pressure ||
+         swap_with_pressure;
+}
+
+bool HasSevereIoConfirmation(const SystemMonitorHostInput& host) {
+  return host.io_full_avg10 >= kCfg.io_full_high ||
+         host.io_full_avg60 >= kCfg.io_pressure_severe ||
+         (host.psi_io_some >= kCfg.io_some_high &&
+          host.io_some_avg60 >= kCfg.io_some_avg60_high);
+}
+
+bool HasSevereSingleResourcePressure(const SystemMonitorHostInput& host,
+                                     const ResourceScores& scores) {
+  if (scores.primary == ResourceBottleneck::kCpu &&
+      scores.cpu >= kCfg.saturated_primary_threshold) {
+    return HasSevereCpuConfirmation(host);
+  }
+  if (scores.primary == ResourceBottleneck::kMemory &&
+      scores.memory >= kCfg.saturated_primary_threshold) {
+    return HasSevereMemoryConfirmation(host);
+  }
+  if (scores.primary == ResourceBottleneck::kIo &&
+      scores.io >= kCfg.saturated_primary_threshold) {
+    return HasSevereIoConfirmation(host);
+  }
+  return false;
+}
+
 ResourceScores ComputeHostResourceScores(const SystemMonitorHostInput& host) {
   ResourceScores out;
 
@@ -169,6 +221,10 @@ ResourceScores ComputeHostResourceScores(const SystemMonitorHostInput& host) {
                       ? ResourceBottleneck::kNone : ranked[1].first;
   out.host_risk = Clamp01(0.60 * ranked[0].second + 0.30 * ranked[1].second +
                           0.10 * ranked[2].second);
+  if (HasSevereSingleResourcePressure(host, out)) {
+    out.host_risk = std::max(out.host_risk,
+                             std::max(kCfg.severe_risk_floor, kCfg.risk_high));
+  }
   return out;
 }
 

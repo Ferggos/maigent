@@ -6,6 +6,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "maigent.pb.h"
@@ -59,6 +60,30 @@ bool IsManagedTarget(const maigent::UnifiedTarget& target) {
   return target.source == maigent::TargetSource::kManagedTask;
 }
 
+bool IsRegisteredExternalProcessTargetId(const std::string& target_id) {
+  return target_id.rfind("external_process:", 0) == 0;
+}
+
+bool IsExternalSoftAction(const maigent::ControlAction& action) {
+  return action.action_type() == maigent::RENICE &&
+         action.target_type() == maigent::TARGET_PROCESS &&
+         action.pid() > 0 &&
+         IsRegisteredExternalProcessTargetId(action.target_id());
+}
+
+std::unordered_set<std::string> CurrentExternalProcessTargetIds(
+    const maigent::TargetsState& targets) {
+  std::unordered_set<std::string> out;
+  out.reserve(static_cast<size_t>(targets.targets_size()));
+  for (const auto& target : targets.targets()) {
+    if (target.source_type() == maigent::EXTERNAL_PROCESS &&
+        IsRegisteredExternalProcessTargetId(target.target_id())) {
+      out.insert(target.target_id());
+    }
+  }
+  return out;
+}
+
 bool IsManagedTaskRouteAction(const maigent::ControlAction& action) {
   return action.target_type() == maigent::TARGET_TASK &&
          !action.task_id().empty() && !action.executor_id().empty();
@@ -96,6 +121,12 @@ struct FrozenManagedTarget {
   int64_t thaw_pending_until_ms = 0;
 };
 
+struct ExternalSoftActionState {
+  int64_t last_dispatched_ms = 0;
+  int64_t last_applied_ms = 0;
+  int64_t suppress_until_ms = 0;
+};
+
 struct ActiveTask {
   std::string task_id;
   std::string executor_id;
@@ -112,6 +143,8 @@ struct PlannerState {
   std::unordered_map<std::string, int64_t> failed_action_backoff_until_ms;
   std::unordered_map<std::string, int64_t> hard_action_cooldown_until_ms;
   std::unordered_map<std::string, FrozenManagedTarget> frozen_managed_targets;
+  std::unordered_map<std::string, ExternalSoftActionState> external_soft_actions;
+  int64_t last_external_soft_suppression_log_ms = 0;
   int64_t last_action_ms = 0;
 };
 
@@ -138,6 +171,10 @@ int main(int argc, char** argv) {
   cfg.hard_action_cooldown_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--hard-action-cooldown-ms",
                                                  15000));
+  cfg.external_soft_action_cooldown_ms =
+      std::max<int64_t>(0, maigent::GetFlagInt64(
+                               argc, argv, "--external-soft-action-cooldown-ms",
+                               30000));
   cfg.min_freeze_duration_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--min-freeze-duration-ms",
                                                  15000));
@@ -280,11 +317,20 @@ int main(int argc, char** argv) {
         result.ts_ms() > 0 ? result.ts_ms() : maigent::NowMs();
     const std::string key =
         ActionFailureKey(result.target_id(), result.action_type());
+    const bool is_external_soft_result =
+        result.action_type() == maigent::RENICE &&
+        IsRegisteredExternalProcessTargetId(result.target_id());
     std::lock_guard<std::mutex> lock(mu);
     if (is_failure) {
       const int64_t until_ms = event_ts_ms + cfg.action_failure_backoff_ms;
       auto& slot = st.failed_action_backoff_until_ms[key];
       slot = std::max(slot, until_ms);
+      if (is_external_soft_result) {
+        auto& soft_state = st.external_soft_actions[result.target_id()];
+        soft_state.suppress_until_ms =
+            std::max(soft_state.suppress_until_ms,
+                     event_ts_ms + cfg.external_soft_action_cooldown_ms);
+      }
       if (result.action_type() == maigent::FREEZE) {
         st.frozen_managed_targets.erase(result.target_id());
       } else if (result.action_type() == maigent::THAW) {
@@ -295,6 +341,13 @@ int main(int argc, char** argv) {
       }
     } else {
       st.failed_action_backoff_until_ms.erase(key);
+      if (is_external_soft_result) {
+        auto& soft_state = st.external_soft_actions[result.target_id()];
+        soft_state.last_applied_ms = event_ts_ms;
+        soft_state.suppress_until_ms =
+            std::max(soft_state.suppress_until_ms,
+                     event_ts_ms + cfg.external_soft_action_cooldown_ms);
+      }
       if (result.action_type() == maigent::THAW) {
         st.frozen_managed_targets.erase(result.target_id());
       }
@@ -354,6 +407,7 @@ int main(int argc, char** argv) {
     int active_tasks_count = 0;
     int64_t last_action_ms = 0;
     size_t frozen_managed_targets_count = 0;
+    size_t external_soft_actions_count = 0;
 
     {
       std::lock_guard<std::mutex> lock(mu);
@@ -364,6 +418,7 @@ int main(int argc, char** argv) {
       active_tasks_count = static_cast<int>(st.active_tasks.size());
       last_action_ms = st.last_action_ms;
       frozen_managed_targets_count = st.frozen_managed_targets.size();
+      external_soft_actions_count = st.external_soft_actions.size();
     }
 
     const int64_t now = maigent::NowMs();
@@ -390,6 +445,20 @@ int main(int argc, char** argv) {
         pressure.risk_level() != maigent::RISK_HIGH &&
         forecast.risk_level() != maigent::RISK_HIGH &&
         consecutive_non_high_recovery >= cfg.thaw_stable_cycles;
+
+    if (external_soft_actions_count > 0) {
+      const auto current_external_targets = CurrentExternalProcessTargetIds(targets);
+      std::lock_guard<std::mutex> lock(mu);
+      for (auto it = st.external_soft_actions.begin();
+           it != st.external_soft_actions.end();) {
+        if (current_external_targets.find(it->first) ==
+            current_external_targets.end()) {
+          it = st.external_soft_actions.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
 
     maigent::PlannerModelInput model_input;
     bool model_input_ready = false;
@@ -528,6 +597,8 @@ int main(int argc, char** argv) {
       int dropped_due_hard_cooldown = 0;
       int dropped_due_hard_cycle_limit = 0;
       int dropped_due_already_frozen = 0;
+      int dropped_due_external_soft_cooldown = 0;
+      bool log_external_soft_suppression = false;
       bool hard_action_selected = false;
       {
         std::lock_guard<std::mutex> lock(mu);
@@ -563,6 +634,14 @@ int main(int argc, char** argv) {
             ++dropped_due_already_frozen;
             continue;
           }
+          if (IsExternalSoftAction(action)) {
+            const auto soft_it = st.external_soft_actions.find(action.target_id());
+            if (soft_it != st.external_soft_actions.end() &&
+                soft_it->second.suppress_until_ms > now) {
+              ++dropped_due_external_soft_cooldown;
+              continue;
+            }
+          }
           if (IsHardControlAction(action.action_type())) {
             const auto hard_it = st.hard_action_cooldown_until_ms.find(key);
             if (hard_it != st.hard_action_cooldown_until_ms.end() &&
@@ -577,6 +656,11 @@ int main(int argc, char** argv) {
             hard_action_selected = true;
           }
           dispatchable_actions.push_back(action);
+        }
+        if (dropped_due_external_soft_cooldown > 0 &&
+            now - st.last_external_soft_suppression_log_ms >= 5000) {
+          st.last_external_soft_suppression_log_ms = now;
+          log_external_soft_suppression = true;
         }
       }
 
@@ -596,18 +680,27 @@ int main(int argc, char** argv) {
         log.Debug("suppressed FREEZE for already frozen managed targets dropped=" +
                   std::to_string(dropped_due_already_frozen));
       }
+      if (log_external_soft_suppression) {
+        log.Debug("suppressed repeated external RENICE by cooldown dropped=" +
+                  std::to_string(dropped_due_external_soft_cooldown));
+      }
 
       if (!dispatchable_actions.empty()) {
         std::vector<std::string> dispatched_hard_keys;
         std::vector<std::string> dispatched_managed_freeze_targets;
         std::vector<std::string> dispatched_managed_thaw_targets;
+        std::vector<std::string> dispatched_external_soft_targets;
         dispatched_hard_keys.reserve(dispatchable_actions.size());
         dispatched_managed_freeze_targets.reserve(dispatchable_actions.size());
         dispatched_managed_thaw_targets.reserve(dispatchable_actions.size());
+        dispatched_external_soft_targets.reserve(dispatchable_actions.size());
         for (const auto& action : dispatchable_actions) {
           if (IsHardControlAction(action.action_type())) {
             dispatched_hard_keys.push_back(
                 ActionFailureKey(action.target_id(), action.action_type()));
+          }
+          if (IsExternalSoftAction(action)) {
+            dispatched_external_soft_targets.push_back(action.target_id());
           }
           if (action.action_type() == maigent::FREEZE &&
               IsManagedTaskRouteAction(action)) {
@@ -621,9 +714,17 @@ int main(int argc, char** argv) {
         }
         std::lock_guard<std::mutex> lock(mu);
         const int64_t hard_until = now + cfg.hard_action_cooldown_ms;
+        const int64_t external_soft_until =
+            now + cfg.external_soft_action_cooldown_ms;
         for (const auto& key : dispatched_hard_keys) {
           auto& slot = st.hard_action_cooldown_until_ms[key];
           slot = std::max(slot, hard_until);
+        }
+        for (const auto& target_id : dispatched_external_soft_targets) {
+          auto& soft_state = st.external_soft_actions[target_id];
+          soft_state.last_dispatched_ms = now;
+          soft_state.suppress_until_ms =
+              std::max(soft_state.suppress_until_ms, external_soft_until);
         }
         for (const auto& target_id : dispatched_managed_freeze_targets) {
           auto& frozen = st.frozen_managed_targets[target_id];

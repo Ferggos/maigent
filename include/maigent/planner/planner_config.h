@@ -29,6 +29,10 @@ struct PlannerAgentConfig {
   // SET_CPU_MAX (ms). Prevents hammering the same target.
   int64_t hard_action_cooldown_ms = 15000;
 
+  // Post-dispatch cooldown for soft external process actions such as RENICE
+  // (ms). Prevents repeatedly deprioritizing the same registered process.
+  int64_t external_soft_action_cooldown_ms = 30000;
+
   // A frozen target stays frozen for at least this duration before THAW
   // eligibility is considered (ms). See interdependency note above.
   int64_t min_freeze_duration_ms = 15000;

@@ -80,6 +80,7 @@ class SystemMonitorRawCollector {
 };
 
 std::string MakeExternalProcessTargetId(int pid, uint64_t starttime_ticks);
+std::string ReadProcCgroupPath(int pid);
 bool ReadProcessStarttimeTicks(int pid, uint64_t* out);
 
 }  // namespace maigent

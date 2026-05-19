@@ -152,7 +152,7 @@ std::string NormalizeCgroupPath(const std::string& input,
   return p.generic_string();
 }
 
-std::string ReadProcCgroupPath(int pid) {
+std::string ReadProcCgroupPathInternal(int pid) {
   if (pid <= 0) {
     return {};
   }
@@ -410,7 +410,7 @@ std::optional<SystemMonitorTargetRawState> BuildExternalProcessTarget(
   std::string cgroup_path =
       NormalizeCgroupPath(process.cgroup_path, cgroup_root);
   if (cgroup_path.empty()) {
-    cgroup_path = NormalizeCgroupPath(ReadProcCgroupPath(process.pid),
+    cgroup_path = NormalizeCgroupPath(ReadProcCgroupPathInternal(process.pid),
                                       cgroup_root);
   }
   out.cgroup_path = cgroup_path;
@@ -494,6 +494,10 @@ bool SystemMonitorRawCollector::CollectSnapshot(
 std::string MakeExternalProcessTargetId(int pid, uint64_t starttime_ticks) {
   return "external_process:" + std::to_string(pid) + ":" +
          std::to_string(starttime_ticks);
+}
+
+std::string ReadProcCgroupPath(int pid) {
+  return ReadProcCgroupPathInternal(pid);
 }
 
 bool ReadProcessStarttimeTicks(int pid, uint64_t* out) {

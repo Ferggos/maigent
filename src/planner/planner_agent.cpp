@@ -2,11 +2,13 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "maigent.pb.h"
@@ -25,6 +27,9 @@
 namespace {
 
 std::atomic<bool> g_stop{false};
+
+constexpr int kUnsetNice = std::numeric_limits<int>::min();
+constexpr int kActuatorDefaultNice = 10;
 
 void HandleSignal(int) { g_stop.store(true); }
 
@@ -69,6 +74,16 @@ bool IsExternalSoftAction(const maigent::ControlAction& action) {
          action.target_type() == maigent::TARGET_PROCESS &&
          action.pid() > 0 &&
          IsRegisteredExternalProcessTargetId(action.target_id());
+}
+
+bool HasNice(int value) { return value != kUnsetNice; }
+
+int DesiredNice(const maigent::ControlAction& action) {
+  auto it = action.numeric_params().find("nice");
+  if (it == action.numeric_params().end()) {
+    return kActuatorDefaultNice;
+  }
+  return static_cast<int>(it->second);
 }
 
 std::unordered_set<std::string> CurrentExternalProcessTargetIds(
@@ -125,6 +140,11 @@ struct ExternalSoftActionState {
   int64_t last_dispatched_ms = 0;
   int64_t last_applied_ms = 0;
   int64_t suppress_until_ms = 0;
+  int last_requested_nice = kUnsetNice;
+  int last_applied_nice = kUnsetNice;
+  bool renice_pending = false;
+  int pending_nice = kUnsetNice;
+  int64_t pending_until_ms = 0;
 };
 
 struct ActiveTask {
@@ -171,9 +191,9 @@ int main(int argc, char** argv) {
   cfg.hard_action_cooldown_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--hard-action-cooldown-ms",
                                                  15000));
-  cfg.external_soft_action_cooldown_ms =
+  cfg.external_soft_action_retry_backoff_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(
-                               argc, argv, "--external-soft-action-cooldown-ms",
+                               argc, argv, "--external-soft-action-retry-backoff-ms",
                                30000));
   cfg.min_freeze_duration_ms =
       std::max<int64_t>(0, maigent::GetFlagInt64(argc, argv, "--min-freeze-duration-ms",
@@ -322,14 +342,18 @@ int main(int argc, char** argv) {
         IsRegisteredExternalProcessTargetId(result.target_id());
     std::lock_guard<std::mutex> lock(mu);
     if (is_failure) {
-      const int64_t until_ms = event_ts_ms + cfg.action_failure_backoff_ms;
-      auto& slot = st.failed_action_backoff_until_ms[key];
-      slot = std::max(slot, until_ms);
       if (is_external_soft_result) {
         auto& soft_state = st.external_soft_actions[result.target_id()];
+        soft_state.renice_pending = false;
+        soft_state.pending_until_ms = 0;
+        soft_state.pending_nice = kUnsetNice;
         soft_state.suppress_until_ms =
             std::max(soft_state.suppress_until_ms,
-                     event_ts_ms + cfg.external_soft_action_cooldown_ms);
+                     event_ts_ms + cfg.external_soft_action_retry_backoff_ms);
+      } else {
+        const int64_t until_ms = event_ts_ms + cfg.action_failure_backoff_ms;
+        auto& slot = st.failed_action_backoff_until_ms[key];
+        slot = std::max(slot, until_ms);
       }
       if (result.action_type() == maigent::FREEZE) {
         st.frozen_managed_targets.erase(result.target_id());
@@ -343,10 +367,17 @@ int main(int argc, char** argv) {
       st.failed_action_backoff_until_ms.erase(key);
       if (is_external_soft_result) {
         auto& soft_state = st.external_soft_actions[result.target_id()];
+        const int applied_nice = HasNice(soft_state.pending_nice)
+                                     ? soft_state.pending_nice
+                                     : soft_state.last_requested_nice;
+        soft_state.renice_pending = false;
+        soft_state.pending_until_ms = 0;
+        soft_state.pending_nice = kUnsetNice;
         soft_state.last_applied_ms = event_ts_ms;
-        soft_state.suppress_until_ms =
-            std::max(soft_state.suppress_until_ms,
-                     event_ts_ms + cfg.external_soft_action_cooldown_ms);
+        if (HasNice(applied_nice)) {
+          soft_state.last_applied_nice = applied_nice;
+        }
+        soft_state.suppress_until_ms = 0;
       }
       if (result.action_type() == maigent::THAW) {
         st.frozen_managed_targets.erase(result.target_id());
@@ -597,7 +628,9 @@ int main(int argc, char** argv) {
       int dropped_due_hard_cooldown = 0;
       int dropped_due_hard_cycle_limit = 0;
       int dropped_due_already_frozen = 0;
-      int dropped_due_external_soft_cooldown = 0;
+      int dropped_due_external_soft_backoff = 0;
+      int dropped_due_external_soft_pending = 0;
+      int dropped_due_external_soft_already_applied = 0;
       bool log_external_soft_suppression = false;
       bool hard_action_selected = false;
       {
@@ -635,11 +668,28 @@ int main(int argc, char** argv) {
             continue;
           }
           if (IsExternalSoftAction(action)) {
+            const int desired_nice = DesiredNice(action);
             const auto soft_it = st.external_soft_actions.find(action.target_id());
-            if (soft_it != st.external_soft_actions.end() &&
-                soft_it->second.suppress_until_ms > now) {
-              ++dropped_due_external_soft_cooldown;
-              continue;
+            if (soft_it != st.external_soft_actions.end()) {
+              auto& soft_state = soft_it->second;
+              if (soft_state.renice_pending) {
+                if (soft_state.pending_until_ms > now) {
+                  ++dropped_due_external_soft_pending;
+                  continue;
+                }
+                soft_state.renice_pending = false;
+                soft_state.pending_nice = kUnsetNice;
+                soft_state.pending_until_ms = 0;
+              }
+              if (HasNice(soft_state.last_applied_nice) &&
+                  soft_state.last_applied_nice >= desired_nice) {
+                ++dropped_due_external_soft_already_applied;
+                continue;
+              }
+              if (soft_state.suppress_until_ms > now) {
+                ++dropped_due_external_soft_backoff;
+                continue;
+              }
             }
           }
           if (IsHardControlAction(action.action_type())) {
@@ -657,7 +707,9 @@ int main(int argc, char** argv) {
           }
           dispatchable_actions.push_back(action);
         }
-        if (dropped_due_external_soft_cooldown > 0 &&
+        if ((dropped_due_external_soft_backoff > 0 ||
+             dropped_due_external_soft_pending > 0 ||
+             dropped_due_external_soft_already_applied > 0) &&
             now - st.last_external_soft_suppression_log_ms >= 5000) {
           st.last_external_soft_suppression_log_ms = now;
           log_external_soft_suppression = true;
@@ -681,15 +733,25 @@ int main(int argc, char** argv) {
                   std::to_string(dropped_due_already_frozen));
       }
       if (log_external_soft_suppression) {
-        log.Debug("suppressed repeated external RENICE by cooldown dropped=" +
-                  std::to_string(dropped_due_external_soft_cooldown));
+        if (dropped_due_external_soft_already_applied > 0) {
+          log.Debug("suppressed external RENICE already applied dropped=" +
+                    std::to_string(dropped_due_external_soft_already_applied));
+        }
+        if (dropped_due_external_soft_pending > 0) {
+          log.Debug("suppressed external RENICE pending outcome dropped=" +
+                    std::to_string(dropped_due_external_soft_pending));
+        }
+        if (dropped_due_external_soft_backoff > 0) {
+          log.Debug("suppressed repeated external RENICE by retry backoff dropped=" +
+                    std::to_string(dropped_due_external_soft_backoff));
+        }
       }
 
       if (!dispatchable_actions.empty()) {
         std::vector<std::string> dispatched_hard_keys;
         std::vector<std::string> dispatched_managed_freeze_targets;
         std::vector<std::string> dispatched_managed_thaw_targets;
-        std::vector<std::string> dispatched_external_soft_targets;
+        std::vector<std::pair<std::string, int>> dispatched_external_soft_targets;
         dispatched_hard_keys.reserve(dispatchable_actions.size());
         dispatched_managed_freeze_targets.reserve(dispatchable_actions.size());
         dispatched_managed_thaw_targets.reserve(dispatchable_actions.size());
@@ -700,7 +762,8 @@ int main(int argc, char** argv) {
                 ActionFailureKey(action.target_id(), action.action_type()));
           }
           if (IsExternalSoftAction(action)) {
-            dispatched_external_soft_targets.push_back(action.target_id());
+            dispatched_external_soft_targets.emplace_back(action.target_id(),
+                                                         DesiredNice(action));
           }
           if (action.action_type() == maigent::FREEZE &&
               IsManagedTaskRouteAction(action)) {
@@ -714,17 +777,19 @@ int main(int argc, char** argv) {
         }
         std::lock_guard<std::mutex> lock(mu);
         const int64_t hard_until = now + cfg.hard_action_cooldown_ms;
-        const int64_t external_soft_until =
-            now + cfg.external_soft_action_cooldown_ms;
+        const int64_t external_soft_retry_until =
+            now + cfg.external_soft_action_retry_backoff_ms;
         for (const auto& key : dispatched_hard_keys) {
           auto& slot = st.hard_action_cooldown_until_ms[key];
           slot = std::max(slot, hard_until);
         }
-        for (const auto& target_id : dispatched_external_soft_targets) {
+        for (const auto& [target_id, desired_nice] : dispatched_external_soft_targets) {
           auto& soft_state = st.external_soft_actions[target_id];
           soft_state.last_dispatched_ms = now;
-          soft_state.suppress_until_ms =
-              std::max(soft_state.suppress_until_ms, external_soft_until);
+          soft_state.last_requested_nice = desired_nice;
+          soft_state.renice_pending = true;
+          soft_state.pending_nice = desired_nice;
+          soft_state.pending_until_ms = external_soft_retry_until;
         }
         for (const auto& target_id : dispatched_managed_freeze_targets) {
           auto& frozen = st.frozen_managed_targets[target_id];

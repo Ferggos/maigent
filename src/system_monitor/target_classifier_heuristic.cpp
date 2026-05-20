@@ -48,6 +48,10 @@ void HeuristicTargetClassifier::Classify(UnifiedTarget* target) {
   }
 
   if (source == TargetSource::kExternalGroup) {
+    if (!target->allow_control) {
+      target->is_protected = true;
+      return;
+    }
     if (has_cgroup) {
       AddAction(target, TargetAction::kSetCpuWeight);
       AddAction(target, TargetAction::kSetCpuMax);

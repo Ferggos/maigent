@@ -20,6 +20,10 @@ inline constexpr const char* kSubjectCmdExternalProcessRegister =
     "msg.command.external_process.register";
 inline constexpr const char* kSubjectCmdExternalProcessUnregister =
     "msg.command.external_process.unregister";
+inline constexpr const char* kSubjectCmdExternalCgroupRegister =
+    "msg.command.external_cgroup.register";
+inline constexpr const char* kSubjectCmdExternalCgroupUnregister =
+    "msg.command.external_cgroup.unregister";
 
 inline constexpr const char* kSubjectEvtTaskSubmitted = "msg.event.task.submitted";
 inline constexpr const char* kSubjectEvtTaskStarted = "msg.event.task.started";

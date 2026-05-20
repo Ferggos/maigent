@@ -14,6 +14,7 @@ struct PlannerTargetCandidateFilterConfig {
   size_t external_max_candidates = 8;
   bool include_managed_task_candidates = true;
   bool include_registered_external_process_candidates = true;
+  bool include_registered_external_cgroup_candidates = true;
   bool include_external_group_candidates = false;
   bool include_system_service_candidates = false;
 };

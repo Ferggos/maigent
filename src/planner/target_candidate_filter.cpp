@@ -56,12 +56,49 @@ bool HasRegisteredExternalProcessShape(const UnifiedTarget& target) {
          target.target_id.rfind("external_process:", 0) == 0;
 }
 
+bool HasPathPrefix(const std::string& path, const std::string& prefix) {
+  return path == prefix || path.rfind(prefix + "/", 0) == 0;
+}
+
+bool IsBlockedExternalCgroupPath(const std::string& path) {
+  if (path.empty() || path == "." || path == "/") {
+    return true;
+  }
+  static const std::vector<std::string> kBlockedPrefixes = {
+      "system.slice", "user.slice", "machine.slice", "init.scope",
+  };
+  for (const auto& prefix : kBlockedPrefixes) {
+    if (HasPathPrefix(path, prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool HasRegisteredExternalCgroupShape(const UnifiedTarget& target) {
+  return target.source == TargetSource::kExternalGroup &&
+         target.kind == TargetKind::kCgroup && target.allow_control &&
+         !target.target_id.empty() &&
+         target.target_id.rfind("external_cgroup:", 0) == 0 &&
+         !IsBlockedExternalCgroupPath(target.cgroup_path);
+}
+
 bool IsRegisteredExternalProcessEligible(const UnifiedTarget& target) {
   if (!HasRegisteredExternalProcessShape(target) || target.is_protected) {
     return false;
   }
   return HasAction(target, TargetAction::kRenice) &&
          IsActionRoutable(TargetAction::kRenice, target);
+}
+
+bool IsRegisteredExternalCgroupEligible(const UnifiedTarget& target) {
+  if (!HasRegisteredExternalCgroupShape(target) || target.is_protected) {
+    return false;
+  }
+  return (HasAction(target, TargetAction::kSetCpuWeight) &&
+          IsActionRoutable(TargetAction::kSetCpuWeight, target)) ||
+         (HasAction(target, TargetAction::kSetMemHigh) &&
+          IsActionRoutable(TargetAction::kSetMemHigh, target));
 }
 
 bool IsExternalEligible(const UnifiedTarget& target) {
@@ -180,6 +217,19 @@ UnifiedTarget ToPlannerEffectiveExternalProcessTarget(
   return out;
 }
 
+UnifiedTarget ToPlannerEffectiveExternalCgroupTarget(const UnifiedTarget& target) {
+  UnifiedTarget out = target;
+  // MVP external cgroup control is soft-only.
+  out.allowed_actions.clear();
+  if (HasAction(target, TargetAction::kSetCpuWeight)) {
+    out.allowed_actions.push_back(TargetAction::kSetCpuWeight);
+  }
+  if (HasAction(target, TargetAction::kSetMemHigh)) {
+    out.allowed_actions.push_back(TargetAction::kSetMemHigh);
+  }
+  return out;
+}
+
 }  // namespace
 
 PlannerTargetCandidateFilter::PlannerTargetCandidateFilter(
@@ -213,6 +263,12 @@ std::vector<UnifiedTarget> PlannerTargetCandidateFilter::BuildCandidates(
     }
 
     if (target.source == TargetSource::kExternalGroup) {
+      if (config_.include_registered_external_cgroup_candidates &&
+          IsRegisteredExternalCgroupEligible(target) &&
+          IsExternalRelevant(target)) {
+        external_pool.push_back(&target);
+        continue;
+      }
       if (!config_.include_external_group_candidates ||
           !IsExternalEligible(target) || !IsExternalRelevant(target)) {
         continue;
@@ -257,12 +313,15 @@ std::vector<UnifiedTarget> PlannerTargetCandidateFilter::BuildCandidates(
   external_targets.reserve(selected.size());
   for (const UnifiedTarget* target : selected) {
     if (target != nullptr) {
-      if (target->source == TargetSource::kExternalProcess) {
-        external_targets.push_back(
-            ToPlannerEffectiveExternalProcessTarget(*target));
-      } else {
-        external_targets.push_back(*target);
-      }
+          if (target->source == TargetSource::kExternalProcess) {
+            external_targets.push_back(
+                ToPlannerEffectiveExternalProcessTarget(*target));
+          } else if (HasRegisteredExternalCgroupShape(*target)) {
+            external_targets.push_back(
+                ToPlannerEffectiveExternalCgroupTarget(*target));
+          } else {
+            external_targets.push_back(*target);
+          }
     }
   }
   std::sort(external_targets.begin(), external_targets.end(), IsExternalLess);

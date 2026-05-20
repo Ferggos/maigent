@@ -120,3 +120,6 @@ target_link_libraries(system_status_client PRIVATE ma_common)
 
 add_executable(external_process_client tools/external_process_client.cpp)
 target_link_libraries(external_process_client PRIVATE ma_common)
+
+add_executable(external_cgroup_client tools/external_cgroup_client.cpp)
+target_link_libraries(external_cgroup_client PRIVATE ma_common)

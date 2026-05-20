@@ -6,6 +6,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <mutex>
 #include <optional>
@@ -61,6 +62,16 @@ struct RegisteredExternalProcess {
   uint64_t proc_starttime_ticks = 0;
   int64_t registered_at_ms = 0;
   bool auto_discovered = false;
+};
+
+struct RegisteredExternalCgroup {
+  std::string target_id;
+  std::string cgroup_path;
+  std::string label;
+  std::string external_id;
+  int priority = 0;
+  bool allow_control = false;
+  int64_t registered_at_ms = 0;
 };
 
 struct ExternalDiscoveryState {
@@ -122,6 +133,165 @@ bool IsPidDirectoryName(const std::string& name) {
   return std::all_of(name.begin(), name.end(), [](unsigned char ch) {
     return std::isdigit(ch) != 0;
   });
+}
+
+bool HasUnsafePathSegment(const std::filesystem::path& path) {
+  for (const auto& part : path) {
+    if (part == "..") {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string StripLeadingSlash(std::string value) {
+  while (!value.empty() && value.front() == '/') {
+    value.erase(value.begin());
+  }
+  return value;
+}
+
+bool HasPathPrefix(const std::string& path, const std::string& prefix) {
+  return path == prefix || path.rfind(prefix + "/", 0) == 0;
+}
+
+bool IsBlockedExternalCgroupPath(const std::string& relative_path) {
+  if (relative_path.empty() || relative_path == "." || relative_path == "/") {
+    return true;
+  }
+  static const std::vector<std::string> kBlockedCgroupPrefixes = {
+      "system.slice", "user.slice", "machine.slice", "init.scope",
+  };
+  for (const auto& prefix : kBlockedCgroupPrefixes) {
+    if (HasPathPrefix(relative_path, prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string SanitizeTargetIdComponent(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (const unsigned char ch : value) {
+    if (std::isalnum(ch) || ch == '.' || ch == '_' || ch == '-') {
+      out.push_back(static_cast<char>(ch));
+    } else {
+      out.push_back('_');
+    }
+  }
+  if (out.size() > 80) {
+    out.resize(80);
+  }
+  return out.empty() ? "cgroup" : out;
+}
+
+uint64_t Fnv1a64(const std::string& value) {
+  uint64_t hash = 1469598103934665603ULL;
+  for (const unsigned char ch : value) {
+    hash ^= static_cast<uint64_t>(ch);
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+std::string MakeExternalCgroupTargetId(const std::string& relative_path) {
+  std::ostringstream oss;
+  oss << "external_cgroup:" << std::hex << Fnv1a64(relative_path) << ":"
+      << SanitizeTargetIdComponent(relative_path);
+  return oss.str();
+}
+
+bool NormalizeRegisteredCgroupPath(const std::string& input,
+                                   const std::filesystem::path& cgroup_root,
+                                   std::string* normalized,
+                                   std::string* reason) {
+  if (normalized != nullptr) {
+    normalized->clear();
+  }
+  const std::string trimmed = Trim(input);
+  if (trimmed.empty()) {
+    if (reason != nullptr) {
+      *reason = "cgroup_path must be non-empty";
+    }
+    return false;
+  }
+
+  std::error_code ec;
+  const auto root = std::filesystem::weakly_canonical(cgroup_root, ec);
+  if (ec || root.empty() || !std::filesystem::is_directory(root, ec) || ec) {
+    if (reason != nullptr) {
+      *reason = "cgroup root is unavailable";
+    }
+    return false;
+  }
+
+  std::filesystem::path candidate_path(trimmed);
+  if (HasUnsafePathSegment(candidate_path)) {
+    if (reason != nullptr) {
+      *reason = "cgroup_path contains unsafe segment";
+    }
+    return false;
+  }
+
+  if (!candidate_path.is_absolute()) {
+    std::string relative = StripLeadingSlash(trimmed);
+    candidate_path = root / std::filesystem::path(relative).lexically_normal();
+  }
+
+  ec.clear();
+  const auto candidate = std::filesystem::weakly_canonical(candidate_path, ec);
+  if (ec || candidate.empty()) {
+    if (reason != nullptr) {
+      *reason = "cgroup_path does not exist";
+    }
+    return false;
+  }
+
+  const std::string root_str = root.generic_string();
+  const std::string candidate_str = candidate.generic_string();
+  if (candidate_str != root_str &&
+      candidate_str.rfind(root_str + "/", 0) != 0) {
+    if (reason != nullptr) {
+      *reason = "cgroup_path escapes cgroup root";
+    }
+    return false;
+  }
+  if (candidate_str == root_str) {
+    if (reason != nullptr) {
+      *reason = "root cgroup is not allowed";
+    }
+    return false;
+  }
+
+  ec.clear();
+  if (!std::filesystem::is_directory(candidate, ec) || ec) {
+    if (reason != nullptr) {
+      *reason = "cgroup_path is not a directory";
+    }
+    return false;
+  }
+
+  std::string relative = std::filesystem::relative(candidate, root, ec).generic_string();
+  if (ec) {
+    if (reason != nullptr) {
+      *reason = "failed to normalize cgroup_path";
+    }
+    return false;
+  }
+  relative = StripLeadingSlash(std::filesystem::path(relative).lexically_normal()
+                                   .generic_string());
+  if (IsBlockedExternalCgroupPath(relative)) {
+    if (reason != nullptr) {
+      *reason = "system-level cgroup path is not allowed";
+    }
+    return false;
+  }
+
+  if (normalized != nullptr) {
+    *normalized = relative;
+  }
+  return true;
 }
 
 std::string ShortLabel(const ExternalDiscoverySample& sample) {
@@ -445,6 +615,8 @@ int main(int argc, char** argv) {
       managed_tasks;
   std::unordered_map<std::string, RegisteredExternalProcess>
       external_processes;
+  std::unordered_map<std::string, RegisteredExternalCgroup>
+      external_cgroups;
   std::unordered_map<std::string, ExternalDiscoveryState>
       external_discovery_state;
   int64_t last_external_discovery_ms = 0;
@@ -523,6 +695,46 @@ int main(int argc, char** argv) {
         result->set_success(success);
         result->set_target_id(target_id);
         result->set_pid(pid);
+        result->set_reason(reason);
+        result->set_ts_ms(maigent::NowMs());
+        nats.RespondEnvelope(incoming, reply);
+      };
+
+  auto respond_external_cgroup_register =
+      [&](const maigent::NatsMessage& incoming, const maigent::Envelope& request,
+          bool success, const std::string& target_id,
+          const std::string& cgroup_path, const std::string& reason) {
+        maigent::Envelope reply;
+        maigent::FillHeader(&reply, maigent::SERVICE,
+                            maigent::MK_EXTERNAL_CGROUP_REGISTER_RESULT, role,
+                            agent_id, request.header().request_id(),
+                            request.header().trace_id(),
+                            request.header().conversation_id());
+        auto* result =
+            reply.mutable_service()->mutable_external_cgroup_register_result();
+        result->set_success(success);
+        result->set_target_id(target_id);
+        result->set_cgroup_path(cgroup_path);
+        result->set_reason(reason);
+        result->set_ts_ms(maigent::NowMs());
+        nats.RespondEnvelope(incoming, reply);
+      };
+
+  auto respond_external_cgroup_unregister =
+      [&](const maigent::NatsMessage& incoming, const maigent::Envelope& request,
+          bool success, const std::string& target_id,
+          const std::string& cgroup_path, const std::string& reason) {
+        maigent::Envelope reply;
+        maigent::FillHeader(&reply, maigent::SERVICE,
+                            maigent::MK_EXTERNAL_CGROUP_UNREGISTER_RESULT, role,
+                            agent_id, request.header().request_id(),
+                            request.header().trace_id(),
+                            request.header().conversation_id());
+        auto* result =
+            reply.mutable_service()->mutable_external_cgroup_unregister_result();
+        result->set_success(success);
+        result->set_target_id(target_id);
+        result->set_cgroup_path(cgroup_path);
         result->set_reason(reason);
         result->set_ts_ms(maigent::NowMs());
         nats.RespondEnvelope(incoming, reply);
@@ -638,10 +850,124 @@ int main(int argc, char** argv) {
     }
   });
 
+  nats.Subscribe(maigent::kSubjectCmdExternalCgroupRegister,
+                 [&](const maigent::NatsMessage& incoming) {
+    maigent::Envelope env;
+    if (!maigent::ParseEnvelope(incoming.data.data(),
+                                static_cast<int>(incoming.data.size()), &env) ||
+        !env.has_command() || !env.command().has_external_cgroup_register()) {
+      return;
+    }
+    if (!env.has_header() || env.header().message_category() != maigent::COMMAND ||
+        env.header().message_kind() != maigent::MK_EXTERNAL_CGROUP_REGISTER) {
+      return;
+    }
+
+    const auto& req = env.command().external_cgroup_register();
+    std::string normalized_path;
+    std::string reason;
+    if (!NormalizeRegisteredCgroupPath(req.cgroup_path(),
+                                       std::filesystem::path(cgroup_root),
+                                       &normalized_path, &reason)) {
+      respond_external_cgroup_register(incoming, env, false, "",
+                                       req.cgroup_path(), reason);
+      return;
+    }
+
+    RegisteredExternalCgroup cgroup;
+    cgroup.target_id = MakeExternalCgroupTargetId(normalized_path);
+    cgroup.cgroup_path = normalized_path;
+    cgroup.label = !req.label().empty() ? req.label() : req.external_id();
+    cgroup.external_id = req.external_id();
+    cgroup.priority = req.priority();
+    // External cgroup registration is explicit; MVP control safety is enforced
+    // by path validation plus planner-side soft-action policy.
+    cgroup.allow_control = true;
+    cgroup.registered_at_ms = maigent::NowMs();
+
+    {
+      std::lock_guard<std::mutex> lock(mu);
+      external_cgroups[cgroup.target_id] = cgroup;
+    }
+
+    log.Info("external cgroup registered cgroup_path=" + cgroup.cgroup_path +
+             " target_id=" + cgroup.target_id +
+             " allow_control=" + std::to_string(cgroup.allow_control));
+    respond_external_cgroup_register(incoming, env, true, cgroup.target_id,
+                                     cgroup.cgroup_path, "registered");
+  });
+
+  nats.Subscribe(maigent::kSubjectCmdExternalCgroupUnregister,
+                 [&](const maigent::NatsMessage& incoming) {
+    maigent::Envelope env;
+    if (!maigent::ParseEnvelope(incoming.data.data(),
+                                static_cast<int>(incoming.data.size()), &env) ||
+        !env.has_command() || !env.command().has_external_cgroup_unregister()) {
+      return;
+    }
+    if (!env.has_header() || env.header().message_category() != maigent::COMMAND ||
+        env.header().message_kind() != maigent::MK_EXTERNAL_CGROUP_UNREGISTER) {
+      return;
+    }
+
+    const auto& req = env.command().external_cgroup_unregister();
+    std::string normalized_path;
+    if (!req.cgroup_path().empty()) {
+      std::string ignored_reason;
+      (void)NormalizeRegisteredCgroupPath(req.cgroup_path(),
+                                          std::filesystem::path(cgroup_root),
+                                          &normalized_path, &ignored_reason);
+    }
+
+    std::string removed_target_id;
+    std::string removed_cgroup_path = normalized_path;
+    bool removed = false;
+    {
+      std::lock_guard<std::mutex> lock(mu);
+      if (!req.target_id().empty()) {
+        auto it = external_cgroups.find(req.target_id());
+        if (it != external_cgroups.end()) {
+          removed_target_id = it->second.target_id;
+          removed_cgroup_path = it->second.cgroup_path;
+          external_cgroups.erase(it);
+          removed = true;
+        }
+      } else if (!normalized_path.empty()) {
+        for (auto it = external_cgroups.begin();
+             it != external_cgroups.end();) {
+          if (it->second.cgroup_path == normalized_path) {
+            if (removed_target_id.empty()) {
+              removed_target_id = it->second.target_id;
+              removed_cgroup_path = it->second.cgroup_path;
+            }
+            it = external_cgroups.erase(it);
+            removed = true;
+          } else {
+            ++it;
+          }
+        }
+      }
+    }
+
+    if (removed) {
+      log.Info("external cgroup unregistered cgroup_path=" +
+               removed_cgroup_path + " target_id=" + removed_target_id);
+      respond_external_cgroup_unregister(incoming, env, true,
+                                         removed_target_id,
+                                         removed_cgroup_path,
+                                         "unregistered");
+    } else {
+      respond_external_cgroup_unregister(incoming, env, false,
+                                         req.target_id(),
+                                         req.cgroup_path(),
+                                         "registered cgroup not found");
+    }
+  });
+
   maigent::AgentLifecycle lifecycle(
       &nats, role, agent_id,
       {"state.pressure", "state.forecast", "state.capacity", "state.targets",
-       "external_process.register"},
+       "external_process.register", "external_cgroup.register"},
       []() { return 0; });
   lifecycle.Start(1000);
 
@@ -782,6 +1108,8 @@ int main(int argc, char** argv) {
     std::vector<maigent::SystemMonitorManagedTaskRawRef> managed_tasks_snapshot;
     std::vector<maigent::SystemMonitorExternalProcessRawRef>
         external_processes_snapshot;
+    std::vector<maigent::SystemMonitorExternalCgroupRawRef>
+        external_cgroups_snapshot;
     std::vector<maigent::SystemMonitorPressureHistorySample>
         pressure_history_snapshot;
     {
@@ -805,12 +1133,25 @@ int main(int argc, char** argv) {
         ref.registered_at_ms = process.registered_at_ms;
         external_processes_snapshot.push_back(std::move(ref));
       }
+      external_cgroups_snapshot.reserve(external_cgroups.size());
+      for (const auto& [target_id, cgroup] : external_cgroups) {
+        (void)target_id;
+        maigent::SystemMonitorExternalCgroupRawRef ref;
+        ref.target_id = cgroup.target_id;
+        ref.label = cgroup.label;
+        ref.cgroup_path = cgroup.cgroup_path;
+        ref.priority = cgroup.priority;
+        ref.allow_control = cgroup.allow_control;
+        ref.registered_at_ms = cgroup.registered_at_ms;
+        external_cgroups_snapshot.push_back(std::move(ref));
+      }
       pressure_history_snapshot = pressure_history;
     }
 
     maigent::SystemMonitorRawSnapshot raw_snapshot;
     if (!raw_collector.CollectSnapshot(managed_tasks_snapshot,
                                        external_processes_snapshot,
+                                       external_cgroups_snapshot,
                                        &raw_snapshot)) {
       log.Warn("failed to collect full raw snapshot");
     }
@@ -821,6 +1162,17 @@ int main(int argc, char** argv) {
         if (erased > 0) {
           log.Info("external process target removed: " + removal.reason +
                    " pid=" + std::to_string(removal.pid) +
+                   " target_id=" + removal.target_id);
+        }
+      }
+    }
+    if (!raw_snapshot.external_cgroup_removals.empty()) {
+      std::lock_guard<std::mutex> lock(mu);
+      for (const auto& removal : raw_snapshot.external_cgroup_removals) {
+        const auto erased = external_cgroups.erase(removal.target_id);
+        if (erased > 0) {
+          log.Info("external cgroup target removed: " + removal.reason +
+                   " cgroup_path=" + removal.cgroup_path +
                    " target_id=" + removal.target_id);
         }
       }

@@ -73,6 +73,35 @@ bool IsRegisteredExternalProcess(const UnifiedTarget& target) {
          SupportsAction(target, TargetAction::kRenice);
 }
 
+bool HasPathPrefix(const std::string& path, const std::string& prefix) {
+  return path == prefix || path.rfind(prefix + "/", 0) == 0;
+}
+
+bool IsBlockedExternalCgroupPath(const std::string& path) {
+  if (path.empty() || path == "." || path == "/") {
+    return true;
+  }
+  static const std::vector<std::string> kBlockedPrefixes = {
+      "system.slice", "user.slice", "machine.slice", "init.scope",
+  };
+  for (const auto& prefix : kBlockedPrefixes) {
+    if (HasPathPrefix(path, prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsRegisteredExternalCgroup(const UnifiedTarget& target) {
+  return target.source == TargetSource::kExternalGroup &&
+         target.kind == TargetKind::kCgroup && target.allow_control &&
+         !target.is_protected && !target.target_id.empty() &&
+         target.target_id.rfind("external_cgroup:", 0) == 0 &&
+         !IsBlockedExternalCgroupPath(target.cgroup_path) &&
+         (SupportsAction(target, TargetAction::kSetCpuWeight) ||
+          SupportsAction(target, TargetAction::kSetMemHigh));
+}
+
 double PriorityPenalty(int priority) {
   if (priority < 0) {
     return kCfg.priority_penalty_none;
@@ -489,7 +518,9 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
   for (const auto& target : input.targets) {
     const bool is_managed_task = IsManagedTask(target);
     const bool is_external_process = IsRegisteredExternalProcess(target);
-    if (target.is_protected || (!is_managed_task && !is_external_process)) {
+    const bool is_external_cgroup = IsRegisteredExternalCgroup(target);
+    if (target.is_protected ||
+        (!is_managed_task && !is_external_process && !is_external_cgroup)) {
       continue;
     }
 
@@ -499,6 +530,21 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
         continue;
       }
       planned_action = PlannerInterventionType::kDeprioritize;
+    } else if (is_external_cgroup) {
+      if (strategy == PlannerStrategy::kRelieveCpu &&
+          SupportsAction(target, TargetAction::kSetCpuWeight)) {
+        planned_action = PlannerInterventionType::kLimitCpuShare;
+      } else if ((strategy == PlannerStrategy::kRelieveMemory ||
+                  (strategy == PlannerStrategy::kEmergency && memory_dominant)) &&
+                 SupportsAction(target, TargetAction::kSetMemHigh)) {
+        planned_action = PlannerInterventionType::kLimitMemorySoft;
+      } else if (strategy == PlannerStrategy::kEmergency &&
+                 !memory_dominant &&
+                 SupportsAction(target, TargetAction::kSetCpuWeight)) {
+        planned_action = PlannerInterventionType::kLimitCpuShare;
+      } else {
+        continue;
+      }
     } else {
       planned_action = PickIntervention(target, input, strategy, memory_dominant);
     }

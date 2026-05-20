@@ -425,6 +425,39 @@ std::optional<SystemMonitorTargetRawState> BuildExternalProcessTarget(
   return out;
 }
 
+std::optional<SystemMonitorTargetRawState> BuildRegisteredExternalCgroupTarget(
+    const SystemMonitorExternalCgroupRawRef& cgroup,
+    const std::filesystem::path& cgroup_root,
+    SystemMonitorExternalCgroupRemoval* removal) {
+  if (cgroup.target_id.empty() || cgroup.cgroup_path.empty()) {
+    return std::nullopt;
+  }
+
+  const std::filesystem::path cg = cgroup_root / cgroup.cgroup_path;
+  if (!std::filesystem::exists(cg) || !std::filesystem::is_directory(cg)) {
+    if (removal != nullptr) {
+      removal->target_id = cgroup.target_id;
+      removal->cgroup_path = cgroup.cgroup_path;
+      removal->reason = "cgroup missing";
+    }
+    return std::nullopt;
+  }
+
+  SystemMonitorTargetRawState out;
+  out.target_id = cgroup.target_id;
+  out.kind = TargetKind::kCgroup;
+  out.source = TargetSource::kExternalGroup;
+  out.started_ms = cgroup.registered_at_ms;
+  out.cgroup_path = cgroup.cgroup_path;
+  out.task_class = !cgroup.label.empty() ? cgroup.label : cgroup.cgroup_path;
+  out.priority = cgroup.priority;
+  out.allow_control = cgroup.allow_control;
+  out.memory_current_mb =
+      static_cast<double>(ReadIntFile(cg / "memory.current")) / (1024.0 * 1024.0);
+  PopulateCgroupMetrics(cg, &out);
+  return out;
+}
+
 SystemMonitorTargetRawState BuildExternalGroupTarget(
     const std::filesystem::path& cgroup_root) {
   SystemMonitorTargetRawState out;
@@ -462,6 +495,7 @@ SystemMonitorRawCollector::SystemMonitorRawCollector(std::string cgroup_root)
 bool SystemMonitorRawCollector::CollectSnapshot(
     const std::vector<SystemMonitorManagedTaskRawRef>& managed_tasks,
     const std::vector<SystemMonitorExternalProcessRawRef>& external_processes,
+    const std::vector<SystemMonitorExternalCgroupRawRef>& external_cgroups,
     SystemMonitorRawSnapshot* out) {
   if (out == nullptr) {
     return false;
@@ -470,7 +504,9 @@ bool SystemMonitorRawCollector::CollectSnapshot(
   const bool host_ok = host_raw_collector_.Sample(&out->host);
   out->targets.clear();
   out->external_process_removals.clear();
-  out->targets.reserve(managed_tasks.size() + external_processes.size() + 2);
+  out->external_cgroup_removals.clear();
+  out->targets.reserve(managed_tasks.size() + external_processes.size() +
+                       external_cgroups.size() + 2);
 
   const std::filesystem::path cgroup_root(cgroup_root_);
   for (const auto& task : managed_tasks) {
@@ -483,6 +519,16 @@ bool SystemMonitorRawCollector::CollectSnapshot(
       out->targets.push_back(std::move(*target));
     } else if (!removal.target_id.empty()) {
       out->external_process_removals.push_back(std::move(removal));
+    }
+  }
+  for (const auto& cgroup : external_cgroups) {
+    SystemMonitorExternalCgroupRemoval removal;
+    auto target = BuildRegisteredExternalCgroupTarget(cgroup, cgroup_root,
+                                                      &removal);
+    if (target.has_value()) {
+      out->targets.push_back(std::move(*target));
+    } else if (!removal.target_id.empty()) {
+      out->external_cgroup_removals.push_back(std::move(removal));
     }
   }
   out->targets.push_back(BuildExternalGroupTarget(cgroup_root));

@@ -36,6 +36,21 @@ struct SystemMonitorExternalProcessRemoval {
   std::string reason;
 };
 
+struct SystemMonitorExternalCgroupRawRef {
+  std::string target_id;
+  std::string label;
+  std::string cgroup_path;
+  int priority = 0;
+  bool allow_control = false;
+  int64_t registered_at_ms = 0;
+};
+
+struct SystemMonitorExternalCgroupRemoval {
+  std::string target_id;
+  std::string cgroup_path;
+  std::string reason;
+};
+
 struct SystemMonitorTargetRawState {
   std::string target_id;
   TargetKind kind = TargetKind::kUnspecified;
@@ -64,6 +79,7 @@ struct SystemMonitorRawSnapshot {
   HostRawState host;
   std::vector<SystemMonitorTargetRawState> targets;
   std::vector<SystemMonitorExternalProcessRemoval> external_process_removals;
+  std::vector<SystemMonitorExternalCgroupRemoval> external_cgroup_removals;
 };
 
 class SystemMonitorRawCollector {
@@ -72,6 +88,7 @@ class SystemMonitorRawCollector {
 
   bool CollectSnapshot(const std::vector<SystemMonitorManagedTaskRawRef>& managed_tasks,
                        const std::vector<SystemMonitorExternalProcessRawRef>& external_processes,
+                       const std::vector<SystemMonitorExternalCgroupRawRef>& external_cgroups,
                        SystemMonitorRawSnapshot* out);
 
  private:

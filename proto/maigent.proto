@@ -63,6 +63,10 @@ enum MessageKind {
   MK_EXTERNAL_PROCESS_UNREGISTER = 39;
   MK_EXTERNAL_PROCESS_REGISTER_RESULT = 40;
   MK_EXTERNAL_PROCESS_UNREGISTER_RESULT = 41;
+  MK_EXTERNAL_CGROUP_REGISTER = 42;
+  MK_EXTERNAL_CGROUP_UNREGISTER = 43;
+  MK_EXTERNAL_CGROUP_REGISTER_RESULT = 44;
+  MK_EXTERNAL_CGROUP_UNREGISTER_RESULT = 45;
 }
 
 enum SubmitStatus {
@@ -474,6 +478,35 @@ message ExternalProcessUnregisterResult {
   int64 ts_ms = 5;
 }
 
+message ExternalCgroupRegister {
+  string cgroup_path = 1;
+  string label = 2;
+  string external_id = 3;
+  int32 priority = 4;
+  bool allow_control = 5;
+}
+
+message ExternalCgroupUnregister {
+  string target_id = 1;
+  string cgroup_path = 2;
+}
+
+message ExternalCgroupRegisterResult {
+  bool success = 1;
+  string target_id = 2;
+  string cgroup_path = 3;
+  string reason = 4;
+  int64 ts_ms = 5;
+}
+
+message ExternalCgroupUnregisterResult {
+  bool success = 1;
+  string target_id = 2;
+  string cgroup_path = 3;
+  string reason = 4;
+  int64 ts_ms = 5;
+}
+
 message CommandMessage {
   oneof payload {
     SubmitTask submit_task = 1;
@@ -486,6 +519,8 @@ message CommandMessage {
     SystemStatusRequest system_status_request = 9;
     ExternalProcessRegister external_process_register = 10;
     ExternalProcessUnregister external_process_unregister = 11;
+    ExternalCgroupRegister external_cgroup_register = 12;
+    ExternalCgroupUnregister external_cgroup_unregister = 13;
   }
 }
 
@@ -518,6 +553,8 @@ message ServiceMessage {
     LeaseDecision lease_decision = 8;
     ExternalProcessRegisterResult external_process_register_result = 9;
     ExternalProcessUnregisterResult external_process_unregister_result = 10;
+    ExternalCgroupRegisterResult external_cgroup_register_result = 11;
+    ExternalCgroupUnregisterResult external_cgroup_unregister_result = 12;
   }
 }
 

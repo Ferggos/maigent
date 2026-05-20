@@ -45,6 +45,9 @@ struct ExternalDiscoveryConfig {
   int max_processes = 32;
   int64_t idle_ttl_ms = 30000;
   uint64_t min_cpu_delta_ticks = 1;
+  double min_cpu_cores = 0.10;
+  int min_relevant_cycles = 2;
+  bool include_root_processes = false;
 };
 
 struct RegisteredExternalProcess {
@@ -63,8 +66,10 @@ struct RegisteredExternalProcess {
 struct ExternalDiscoveryState {
   bool initialized = false;
   uint64_t prev_cpu_ticks = 0;
+  int64_t prev_sample_ms = 0;
   int64_t last_seen_ms = 0;
   int64_t last_relevant_ms = 0;
+  int relevant_cycles = 0;
 };
 
 struct ExternalDiscoverySample {
@@ -74,6 +79,7 @@ struct ExternalDiscoverySample {
   uint64_t starttime_ticks = 0;
   uint64_t cpu_ticks = 0;
   int64_t rss_mb = 0;
+  int uid = -1;
 };
 
 struct ExternalDiscoveryCandidate {
@@ -83,6 +89,7 @@ struct ExternalDiscoveryCandidate {
   std::string cgroup_path;
   uint64_t starttime_ticks = 0;
   uint64_t delta_cpu_ticks = 0;
+  double cpu_cores_used = 0.0;
   int64_t rss_mb = 0;
 };
 
@@ -127,6 +134,11 @@ std::string ShortLabel(const ExternalDiscoverySample& sample) {
   return label;
 }
 
+int64_t ClockTicksPerSecond() {
+  const long ticks = sysconf(_SC_CLK_TCK);
+  return ticks > 0 ? static_cast<int64_t>(ticks) : 100;
+}
+
 std::string ReadProcCmdline(int pid) {
   std::ifstream in("/proc/" + std::to_string(pid) + "/cmdline",
                    std::ios::in | std::ios::binary);
@@ -144,21 +156,38 @@ std::string ReadProcCmdline(int pid) {
   return Trim(value);
 }
 
-int64_t ReadProcRssMb(int pid) {
+struct ProcStatusSample {
+  int64_t rss_mb = 0;
+  int uid = -1;
+};
+
+ProcStatusSample ReadProcStatusSample(int pid) {
+  ProcStatusSample out;
   std::ifstream in("/proc/" + std::to_string(pid) + "/status");
   if (!in.is_open()) {
-    return 0;
+    return out;
   }
 
-  std::string key;
-  int64_t value_kb = 0;
-  std::string unit;
-  while (in >> key >> value_kb >> unit) {
-    if (key == "VmRSS:") {
-      return value_kb / 1024;
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.rfind("Uid:", 0) == 0) {
+      std::istringstream iss(line.substr(4));
+      int uid = -1;
+      if (iss >> uid) {
+        out.uid = uid;
+      }
+      continue;
+    }
+    if (line.rfind("VmRSS:", 0) == 0) {
+      std::istringstream iss(line.substr(6));
+      int64_t value_kb = 0;
+      std::string unit;
+      if (iss >> value_kb >> unit) {
+        out.rss_mb = value_kb / 1024;
+      }
     }
   }
-  return 0;
+  return out;
 }
 
 std::optional<ExternalDiscoverySample> ReadExternalDiscoverySample(int pid) {
@@ -191,7 +220,9 @@ std::optional<ExternalDiscoverySample> ReadExternalDiscoverySample(int pid) {
   out.pid = pid;
   out.comm = line.substr(open + 1, close - open - 1);
   out.cmdline = ReadProcCmdline(pid);
-  out.rss_mb = ReadProcRssMb(pid);
+  const ProcStatusSample status = ReadProcStatusSample(pid);
+  out.rss_mb = status.rss_mb;
+  out.uid = status.uid;
   try {
     const uint64_t user_ticks = std::stoull(fields_after_comm[11]);
     const uint64_t system_ticks = std::stoull(fields_after_comm[12]);
@@ -224,8 +255,15 @@ bool ContainsBlockedProcessToken(const std::string& comm,
 bool IsSafeExternalDiscoverySample(
     const ExternalDiscoverySample& sample,
     const std::unordered_set<int>& managed_task_pids,
-    int self_pid) {
+    int self_pid,
+    bool include_root_processes) {
   if (sample.pid <= 1 || sample.pid == self_pid) {
+    return false;
+  }
+  if (sample.uid < 0) {
+    return false;
+  }
+  if (!include_root_processes && sample.uid == 0) {
     return false;
   }
   if (managed_task_pids.find(sample.pid) != managed_task_pids.end()) {
@@ -250,6 +288,8 @@ std::vector<ExternalDiscoveryCandidate> DiscoverCpuActiveExternalProcesses(
       config.max_processes <= 0) {
     return candidates;
   }
+  const double clock_ticks_per_second =
+      static_cast<double>(ClockTicksPerSecond());
 
   try {
     for (const auto& entry : std::filesystem::directory_iterator(
@@ -272,7 +312,8 @@ std::vector<ExternalDiscoveryCandidate> DiscoverCpuActiveExternalProcesses(
 
       const auto sample = ReadExternalDiscoverySample(pid);
       if (!sample.has_value() ||
-          !IsSafeExternalDiscoverySample(*sample, managed_task_pids, self_pid)) {
+          !IsSafeExternalDiscoverySample(*sample, managed_task_pids, self_pid,
+                                         config.include_root_processes)) {
         continue;
       }
 
@@ -280,17 +321,37 @@ std::vector<ExternalDiscoveryCandidate> DiscoverCpuActiveExternalProcesses(
           maigent::MakeExternalProcessTargetId(pid, sample->starttime_ticks);
       auto& state = (*discovery_state)[target_id];
       uint64_t delta_ticks = 0;
+      double cpu_cores_used = 0.0;
       if (state.initialized && sample->cpu_ticks >= state.prev_cpu_ticks) {
         delta_ticks = sample->cpu_ticks - state.prev_cpu_ticks;
+        const double elapsed_seconds =
+            state.prev_sample_ms > 0 && now_ms > state.prev_sample_ms
+                ? static_cast<double>(now_ms - state.prev_sample_ms) / 1000.0
+                : 0.0;
+        if (elapsed_seconds > 0.0 && clock_ticks_per_second > 0.0) {
+          cpu_cores_used =
+              (static_cast<double>(delta_ticks) / clock_ticks_per_second) /
+              elapsed_seconds;
+        }
       }
       state.initialized = true;
       state.prev_cpu_ticks = sample->cpu_ticks;
+      state.prev_sample_ms = now_ms;
       state.last_seen_ms = now_ms;
 
-      if (delta_ticks < config.min_cpu_delta_ticks) {
+      const bool cpu_relevant =
+          delta_ticks >= config.min_cpu_delta_ticks &&
+          cpu_cores_used >= config.min_cpu_cores;
+      if (cpu_relevant) {
+        ++state.relevant_cycles;
+        state.last_relevant_ms = now_ms;
+      } else {
+        state.relevant_cycles = 0;
+      }
+      if (!cpu_relevant ||
+          state.relevant_cycles < config.min_relevant_cycles) {
         continue;
       }
-      state.last_relevant_ms = now_ms;
 
       ExternalDiscoveryCandidate candidate;
       candidate.pid = pid;
@@ -299,6 +360,7 @@ std::vector<ExternalDiscoveryCandidate> DiscoverCpuActiveExternalProcesses(
       candidate.cgroup_path = maigent::ReadProcCgroupPath(pid);
       candidate.starttime_ticks = sample->starttime_ticks;
       candidate.delta_cpu_ticks = delta_ticks;
+      candidate.cpu_cores_used = cpu_cores_used;
       candidate.rss_mb = sample->rss_mb;
       candidates.push_back(std::move(candidate));
     }
@@ -309,6 +371,9 @@ std::vector<ExternalDiscoveryCandidate> DiscoverCpuActiveExternalProcesses(
   std::sort(candidates.begin(), candidates.end(),
             [](const ExternalDiscoveryCandidate& lhs,
                const ExternalDiscoveryCandidate& rhs) {
+              if (lhs.cpu_cores_used != rhs.cpu_cores_used) {
+                return lhs.cpu_cores_used > rhs.cpu_cores_used;
+              }
               if (lhs.delta_cpu_ticks != rhs.delta_cpu_ticks) {
                 return lhs.delta_cpu_ticks > rhs.delta_cpu_ticks;
               }
@@ -352,6 +417,15 @@ int main(int argc, char** argv) {
       std::max<int64_t>(0, maigent::GetFlagInt64(
                                argc, argv,
                                "--external-discovery-min-cpu-delta-ticks", 1)));
+  external_discovery_config.min_cpu_cores = std::max(
+      0.0, maigent::GetFlagDouble(argc, argv,
+                                  "--external-discovery-min-cpu-cores", 0.10));
+  external_discovery_config.min_relevant_cycles = std::max(
+      1, maigent::GetFlagInt(argc, argv,
+                             "--external-discovery-min-relevant-cycles", 2));
+  external_discovery_config.include_root_processes =
+      maigent::HasFlag(argc, argv,
+                       "--external-discovery-include-root-processes");
 
   maigent::AgentLogger log(agent_id, "logs/system_monitor.log");
 
@@ -618,6 +692,7 @@ int main(int argc, char** argv) {
                 "auto-discovered external process pid=" +
                 std::to_string(process.pid) + " target_id=" +
                 process.target_id + " label=" + process.label +
+                " cpu_cores=" + std::to_string(candidate.cpu_cores_used) +
                 " delta_ticks=" + std::to_string(candidate.delta_cpu_ticks));
           } else if (it->second.auto_discovered) {
             it->second.label = candidate.label;

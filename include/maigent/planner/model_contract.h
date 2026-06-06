@@ -47,6 +47,7 @@ struct PlannerModelInput {
   PlannerCapacityInput capacity;
   std::vector<UnifiedTarget> targets;
   int active_tasks = 0;
+  bool preemptive = false;
 };
 
 enum class PlannerInterventionType {

@@ -531,9 +531,17 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
       }
       planned_action = PlannerInterventionType::kDeprioritize;
     } else if (is_external_cgroup) {
-      if (strategy == PlannerStrategy::kRelieveCpu &&
-          SupportsAction(target, TargetAction::kSetCpuMax)) {
-        planned_action = PlannerInterventionType::kLimitCpuQuota;
+      if (strategy == PlannerStrategy::kRelieveCpu) {
+        if (input.preemptive &&
+            SupportsAction(target, TargetAction::kSetCpuWeight)) {
+          planned_action = PlannerInterventionType::kLimitCpuShare;   // мягко (превентив)
+        } else if (SupportsAction(target, TargetAction::kSetCpuMax)) {
+          planned_action = PlannerInterventionType::kLimitCpuQuota;   // жёстко (HIGH) — 71→7
+        } else if (SupportsAction(target, TargetAction::kSetCpuWeight)) {
+          planned_action = PlannerInterventionType::kLimitCpuShare;   // фолбэк
+        } else {
+          continue;
+        }
       } else if ((strategy == PlannerStrategy::kRelieveMemory ||
                   (strategy == PlannerStrategy::kEmergency && memory_dominant)) &&
                  SupportsAction(target, TargetAction::kSetMemHigh)) {

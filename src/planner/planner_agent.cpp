@@ -429,6 +429,7 @@ int main(int argc, char** argv) {
   int64_t last_pressure_ts_ms = 0;
   int consecutive_high_pressure = 0;
   int consecutive_non_high_recovery = 0;
+  int consecutive_preempt_signal = 0;
 
   while (!g_stop.load()) {
     maigent::PressureState pressure;
@@ -466,12 +467,26 @@ int main(int argc, char** argv) {
       } else {
         consecutive_non_high_recovery = 0;
       }
+      if (pressure.risk_level() != maigent::RISK_HIGH &&
+          static_cast<int>(forecast.risk_level()) >= cfg.preemptive_forecast_min) {
+        ++consecutive_preempt_signal;
+      } else {
+        consecutive_preempt_signal = 0;
+      }
     }
     const bool sustained_high =
         consecutive_high_pressure >= cfg.sustained_high_cycles;
-    const bool should_attempt_intervention =
+    const bool corrective_intervention =
         pressure.risk_level() == maigent::RISK_HIGH &&
         (sustained_high || forecast.risk_level() == maigent::RISK_HIGH);
+    const bool preemptive_intervention =
+        pressure.risk_level() != maigent::RISK_HIGH &&
+        static_cast<int>(forecast.risk_level()) >= cfg.preemptive_forecast_min &&
+        consecutive_preempt_signal >= cfg.preemptive_cycles;
+    const bool should_attempt_intervention =
+        corrective_intervention || preemptive_intervention;
+    const bool preemptive_mode =
+        preemptive_intervention && !corrective_intervention;
     const bool stable_recovery =
         pressure.risk_level() != maigent::RISK_HIGH &&
         forecast.risk_level() != maigent::RISK_HIGH &&
@@ -497,6 +512,7 @@ int main(int argc, char** argv) {
       if (!model_input_ready) {
         model_input = maigent::ToPlannerModelInput(pressure, forecast, capacity,
                                                    targets, active_tasks_count);
+        model_input.preemptive = preemptive_mode;
         model_input_ready = true;
       }
     };
@@ -691,6 +707,10 @@ int main(int argc, char** argv) {
                 continue;
               }
             }
+          }
+          if (model_input.preemptive && IsHardControlAction(action.action_type())) {
+            // в превентивном режиме жёсткие действия (FREEZE/KILL/SET_MEM_MAX/SET_CPU_MAX) на задачи не применяются
+            continue;
           }
           if (IsHardControlAction(action.action_type())) {
             const auto hard_it = st.hard_action_cooldown_until_ms.find(key);

@@ -21,6 +21,9 @@ struct PlannerAgentConfig {
   // Consecutive HIGH-pressure cycles required before intervention fires.
   // Minimum effective value: 1.
   int sustained_high_cycles = 3;
+  // превентивный режим (упреждение по прогнозу):
+  int preemptive_cycles = 2;          // тиков подряд с прогнозным сигналом (анти-шум)
+  int preemptive_forecast_min = 2;    // мин. forecast.risk: 2=RISK_MED, 3=RISK_HIGH
 
   // How long to suppress an action after it fails (ms).
   int64_t action_failure_backoff_ms = 15000;

@@ -61,7 +61,7 @@ struct PlannerPolicyConfig {
   double   severe_mem_overload_probability = 0.80;
   int64_t  severe_mem_available_mb         = 1024;
   double   severe_mem_pressure_some        = 0.80;
-  double   severe_mem_target_ratio         = 0.08;
+  double   severe_mem_target_ratio        = 0.08;
   double   severe_mem_target_delta_mb      = 128.0;
 
   // ---- Priority penalty ---------------------------------------------------

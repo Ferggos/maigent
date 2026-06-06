@@ -219,13 +219,18 @@ UnifiedTarget ToPlannerEffectiveExternalProcessTarget(
 
 UnifiedTarget ToPlannerEffectiveExternalCgroupTarget(const UnifiedTarget& target) {
   UnifiedTarget out = target;
-  // MVP external cgroup control is soft-only.
   out.allowed_actions.clear();
   if (HasAction(target, TargetAction::kSetCpuWeight)) {
     out.allowed_actions.push_back(TargetAction::kSetCpuWeight);
   }
+  if (HasAction(target, TargetAction::kSetCpuMax)) {
+    out.allowed_actions.push_back(TargetAction::kSetCpuMax);
+  }
   if (HasAction(target, TargetAction::kSetMemHigh)) {
     out.allowed_actions.push_back(TargetAction::kSetMemHigh);
+  }
+  if (HasAction(target, TargetAction::kSetMemMax)) {
+    out.allowed_actions.push_back(TargetAction::kSetMemMax);
   }
   return out;
 }

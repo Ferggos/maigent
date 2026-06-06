@@ -1233,8 +1233,13 @@ int main(int argc, char** argv) {
       nats.PublishEnvelope(maigent::kSubjectStateTargets, env);
     }
 
-    log.Debug("published state pressure_risk=" +
+    log.Info("published state pressure_risk=" +
               std::to_string(pressure.risk_level()) +
+              " mem_avail_mb=" + std::to_string(model_output.pressure.mem_available_mb) +
+              " cpu_pct=" + std::to_string(static_cast<int>(model_output.pressure.cpu_usage_pct)) +
+              " psi_mem=" + std::to_string(model_output.pressure.memory_pressure_some) +
+              " psi_cpu=" + std::to_string(model_output.pressure.cpu_pressure_some) +
+              " psi_io=" + std::to_string(model_output.pressure.io_pressure_some) +
               " targets=" + std::to_string(targets.targets_size()));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));

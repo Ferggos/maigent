@@ -434,7 +434,7 @@ void FillInterventionParams(const UnifiedTarget& target, PlannerStrategy strateg
     case PlannerInterventionType::kLimitCpuQuota: {
       intervention->numeric_params["period"] = 100000.0;
       intervention->numeric_params["quota"] =
-          strategy == PlannerStrategy::kEmergency ? 50000.0 : 70000.0;
+          strategy == PlannerStrategy::kEmergency ? 50000.0 : 640000.0;
       break;
     }
     case PlannerInterventionType::kLimitMemorySoft: {
@@ -532,8 +532,8 @@ PlannerModelOutput HeuristicPlannerModel::Evaluate(const PlannerModelInput& inpu
       planned_action = PlannerInterventionType::kDeprioritize;
     } else if (is_external_cgroup) {
       if (strategy == PlannerStrategy::kRelieveCpu &&
-          SupportsAction(target, TargetAction::kSetCpuWeight)) {
-        planned_action = PlannerInterventionType::kLimitCpuShare;
+          SupportsAction(target, TargetAction::kSetCpuMax)) {
+        planned_action = PlannerInterventionType::kLimitCpuQuota;
       } else if ((strategy == PlannerStrategy::kRelieveMemory ||
                   (strategy == PlannerStrategy::kEmergency && memory_dominant)) &&
                  SupportsAction(target, TargetAction::kSetMemHigh)) {

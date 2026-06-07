@@ -23,7 +23,8 @@ REAL_USER="${SUDO_USER:-$(id -un)}"
 REAL_UID="$(id -u "${REAL_USER}")"
 REAL_GID="$(id -g "${REAL_USER}")"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${SCRIPT_DIR}"
 [[ ! -d "${ROOT_DIR}/build" && -d "${ROOT_DIR}/../build" ]] && ROOT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
@@ -38,8 +39,7 @@ CG_PARENT="${CG_ROOT}/${CG_NAME}"
 CG_LEAF="${CG_PARENT}/load"
 CG_REL="${CG_NAME}/load"
 
-CPU_RAMP="${CPU_RAMP:-${ROOT_DIR}/cpu_ramp.py}"
-[[ -f "${CPU_RAMP}" ]] || CPU_RAMP="/home/${REAL_USER}/cpu_ramp.py"
+CPU_RAMP="${CPU_RAMP:-${SCRIPT_DIR}/cpu_ramp.py}"
 # Фоновая нагрузка должна МЕШАТЬ задачам, но НЕ убивать систему (иначе OOM → все failed).
 # 6 воркеров на 8 ядер: узел занят (~75%), но есть запас и по CPU, и по памяти.
 BG_WORKERS="${BG_WORKERS:-6}"

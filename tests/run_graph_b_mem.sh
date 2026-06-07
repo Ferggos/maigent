@@ -30,7 +30,8 @@ REAL_USER="${SUDO_USER:-$(id -un)}"
 REAL_UID="$(id -u "${REAL_USER}")"
 REAL_GID="$(id -g "${REAL_USER}")"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${SCRIPT_DIR}"
 [[ ! -d "${ROOT_DIR}/build" && -d "${ROOT_DIR}/../build" ]] && ROOT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
@@ -45,12 +46,11 @@ CG_PARENT="${CG_ROOT}/${CG_NAME}"
 CG_LEAF="${CG_PARENT}/load"
 CG_REL="${CG_NAME}/load"
 
-# mem_ramp.py теперь лежит в корне проекта — берём его по умолчанию оттуда.
-RAMP_SCRIPT="${RAMP_SCRIPT:-${ROOT_DIR}/mem_ramp.py}"
-TARGET_MB="${TARGET_MB:-2400}"
-STEP_MB="${STEP_MB:-100}"
-STEP_DELAY="${STEP_DELAY:-5}"
-HOLD_SEC="${HOLD_SEC:-60}"
+RAMP_SCRIPT="${RAMP_SCRIPT:-${SCRIPT_DIR}/mem_ramp.py}"
+TARGET_MB="${TARGET_MB:-2700}"
+STEP_MB="${STEP_MB:-50}"
+STEP_DELAY="${STEP_DELAY:-10}"
+HOLD_SEC="${HOLD_SEC:-90}"
 RAMP_TIME=$(( (TARGET_MB / STEP_MB) * STEP_DELAY ))
 RUN_SECONDS="${RUN_SECONDS:-$(( RAMP_TIME + HOLD_SEC + 15 ))}"
 
@@ -132,7 +132,7 @@ cleanup_cgroup() {
 
 ensure_nats() {
   if ! (timeout 1 bash -c "</dev/tcp/127.0.0.1/4222") 2>/dev/null; then
-    as_user nats-server -a 127.0.0.1 -p 4222 >"${LOG_DIR}/nats-server.log" 2>&1 &
+    as_user nats-server -a 127.0.0.1 -p 4222 </dev/null >"${LOG_DIR}/nats-server.log" 2>&1 &
     sleep 1
   fi
 }
@@ -145,17 +145,17 @@ start_overlay() {
   : > "${LOG_DIR}/runtime_planner_agent.log" 2>/dev/null || true
 
   say "старт надстройки (${mode})"
-  as_user "${BUILD_DIR}/directory_agent"        --nats "${NATS_URL}" >"${LOG_DIR}/runtime_directory_agent.log" 2>&1 &
-  as_user "${BUILD_DIR}/lease_authority_agent"  --nats "${NATS_URL}" >"${LOG_DIR}/runtime_lease_authority_agent.log" 2>&1 &
+  as_user "${BUILD_DIR}/directory_agent"        --nats "${NATS_URL}" </dev/null >"${LOG_DIR}/runtime_directory_agent.log" 2>&1 &
+  as_user "${BUILD_DIR}/lease_authority_agent"  --nats "${NATS_URL}" </dev/null >"${LOG_DIR}/runtime_lease_authority_agent.log" 2>&1 &
   as_user "${BUILD_DIR}/system_monitor_agent"   --nats "${NATS_URL}" --interval-ms 500 --cgroup-root "${CG_ROOT}" \
-       >"${LOG_DIR}/runtime_system_monitor_agent.log" 2>&1 &
+       </dev/null >"${LOG_DIR}/runtime_system_monitor_agent.log" 2>&1 &
   as_user "${BUILD_DIR}/actuator_agent"         --nats "${NATS_URL}" --cgroup-root "${CG_ROOT}" \
-       >"${LOG_DIR}/runtime_actuator_agent.log" 2>&1 &
+       </dev/null >"${LOG_DIR}/runtime_actuator_agent.log" 2>&1 &
   if [[ "${mode}" == "with_planner" ]]; then
-    as_user "${BUILD_DIR}/planner_agent"        --nats "${NATS_URL}" >"${LOG_DIR}/runtime_planner_agent.log" 2>&1 &
+    as_user "${BUILD_DIR}/planner_agent"        --nats "${NATS_URL}" </dev/null >"${LOG_DIR}/runtime_planner_agent.log" 2>&1 &
   fi
   as_user "${BUILD_DIR}/metrics_collector_agent" --nats "${NATS_URL}" --reports-root "${ROOT_DIR}/reports" \
-       >"${LOG_DIR}/runtime_metrics_collector_agent.log" 2>&1 &
+       </dev/null >"${LOG_DIR}/runtime_metrics_collector_agent.log" 2>&1 &
   sleep 4
 }
 
@@ -167,7 +167,7 @@ start_ramp() {
   setsid bash -c "
     echo \$\$ > '${CG_LEAF}/cgroup.procs' 2>/dev/null
     exec python3 '${RAMP_SCRIPT}' --target-mb ${TARGET_MB} --step-mb ${STEP_MB} --step-delay ${STEP_DELAY} --hold-sec ${HOLD_SEC}
-  " >"${LOG_DIR}/mem_ramp.log" 2>&1 &
+  " </dev/null >"${LOG_DIR}/mem_ramp.log" 2>&1 &
   sleep 2
   if ! pgrep -f "mem_ramp.py" >/dev/null 2>&1; then
     err "mem_ramp не запустился:"; cat "${LOG_DIR}/mem_ramp.log" 2>/dev/null | head; return 1
@@ -216,11 +216,6 @@ analyze() {
   mn=$(mem_min "$f"); mx=$(mem_max "$f"); pl=$(mem_plateau "$f")
   pm=$(grep -oP 'psi_mem=\K[0-9.]+' "$f"|sort -g|tail -1)
   [[ -n "$pl" ]] && echo "  MemAvailable: ПЛАТО=${pl}MB  (min=${mn}MB max=${mx}MB) | PSI mem макс=${pm}"
-  grep "pressure_risk=" "$f" | grep -oP 'pressure_risk=\K[0-9]+' \
-    | awk '{c[$1]++;t++} END{
-        if(!t){print "  риск: нет данных"; exit}
-        printf "  риск: LOW %4.1f%% | MED %4.1f%% | HIGH %4.1f%%  (точек %d)\n",
-               100*(c["1"]+0)/t, 100*(c["2"]+0)/t, 100*(c["3"]+0)/t, t; }'
 }
 
 # ---------- main ----------
@@ -243,9 +238,10 @@ say "пауза между фазами"; sleep 5; cleanup_procs
 say "############ ФАЗА B: OVERLAY (с planner) ############"
 run_phase "with_planner" "overlay" || { err "overlay не удался"; cleanup_cgroup; exit 1; }
 
+stty sane 2>/dev/null || true
 echo ""
 echo "############################################################"
-echo "#        ГРАФИК: ДОСТУПНАЯ ПАМЯТЬ (MemAvailable)           #"
+echo "#          ДОСТУПНАЯ ПАМЯТЬ (MemAvailable)                 #"
 echo "############################################################"
 analyze "${RESULT_DIR}/mem_baseline.log" "BASELINE (без надстройки)"
 analyze "${RESULT_DIR}/mem_overlay.log"  "OVERLAY (с надстройкой)"
@@ -258,19 +254,14 @@ echo ""
 echo "------------------------------------------------------------"
 if [[ -n "${BASE_PL}" && -n "${OVL_PL}" ]]; then
   GAP=$(( OVL_PL - BASE_PL ))
-  printf "ПЛАТО (уровень удержания, ИДЁТ НА ГРАФИК):  baseline=%s MB   overlay=%s MB   разница=%+d MB\n" "${BASE_PL}" "${OVL_PL}" "${GAP}"
-  printf "min (кратковременный провал, НЕ для графика):  baseline=%s MB   overlay=%s MB\n" "${BASE_MIN}" "${OVL_MIN}"
+  printf "ПЛАТО (уровень удержания):  baseline=%s MB   overlay=%s MB   разница=%+d MB\n" "${BASE_PL}" "${OVL_PL}" "${GAP}"
+  printf "min (кратковременный провал):  baseline=%s MB   overlay=%s MB\n" "${BASE_MIN}" "${OVL_MIN}"
   if (( GAP > 200 )); then
-    ok "overlay держит плато на ${GAP} МБ выше baseline → ГРАФИК ПОДТВЕРЖДЁН."
+    ok "overlay держит плато на ${GAP} МБ выше baseline."
   elif (( GAP > 0 )); then
-    warn "overlay выше baseline лишь на ${GAP} МБ — эффект слабый (см. подсказки ниже)."
+    warn "overlay выше baseline лишь на ${GAP} МБ — эффект слабый."
   else
-    warn "overlay НЕ выше baseline по плато — надстройка не удержала память (см. подсказки ниже)."
-  fi
-  if (( OVL_PL < 1024 )); then
-    warn "плато overlay (${OVL_PL}) НИЖЕ линии severe 1024 — чтобы держать выше, СНИЗЬ TARGET_MB (см. ниже)."
-  else
-    ok "плато overlay (${OVL_PL}) выше линии severe 1024."
+    warn "overlay НЕ выше baseline по плато — надстройка не удержала память."
   fi
 else
   warn "не удалось извлечь MemAvailable — проверь логи в ${RESULT_DIR}/."
@@ -282,18 +273,6 @@ say "Planner overlay — воздействия по памяти"
 grep -ioE "SET_MEM_HIGH|FREEZE|THAW|sent actuator" "${RESULT_DIR}/planner_overlay.log" 2>/dev/null | sort | uniq -c
 say "Actuator overlay"
 grep -ioE "memory.high|updated|applied|failed" "${RESULT_DIR}/actuator_overlay.log" 2>/dev/null | sort | uniq -c
-
-echo ""
-echo "ПОДСКАЗКИ (для графика смотри ПЛАТО, не min):"
-echo "  - baseline плато высокое (>800) → нагрузка слаба, ПОДНИМИ TARGET_MB."
-echo "  - baseline валится в ~50 и mem_ramp ловит OOM → TARGET слишком высок: СНИЗЬ TARGET_MB"
-echo "    так, чтобы baseline вышел на ровное плато (~686), а не падал в ноль/OOM."
-echo "  - overlay плато слишком низкое (хочешь ~1450) → СНИЗЬ TARGET_MB: при меньшем target"
-echo "    mem_ramp не давит так сильно, и planner удерживает память выше."
-echo "  - overlay плато слишком высокое → подними TARGET_MB."
-echo "  - в overlay 0 'sent actuator' → planner молчит: проверь регистрацию cgroup (allow-control)."
-echo "  - ориентир под твой график (baseline ~686 / overlay >1024): начни с TARGET_MB≈2700,"
-echo "    STEP_MB=50, STEP_DELAY=10, и крути TARGET по плато."
 
 cleanup_cgroup
 say "готово. Логи: ${RESULT_DIR}/mem_baseline.log, mem_overlay.log"

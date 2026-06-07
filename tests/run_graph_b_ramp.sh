@@ -27,7 +27,8 @@ REAL_USER="${SUDO_USER:-$(id -un)}"
 REAL_UID="$(id -u "${REAL_USER}")"
 REAL_GID="$(id -g "${REAL_USER}")"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${SCRIPT_DIR}"
 [[ ! -d "${ROOT_DIR}/build" && -d "${ROOT_DIR}/../build" ]] && ROOT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
@@ -42,7 +43,7 @@ CG_PARENT="${CG_ROOT}/${CG_NAME}"
 CG_LEAF="${CG_PARENT}/load"
 CG_REL="${CG_NAME}/load"
 
-RAMP_SCRIPT="${RAMP_SCRIPT:-/home/${REAL_USER}/mem_ramp.py}"
+RAMP_SCRIPT="${RAMP_SCRIPT:-${SCRIPT_DIR}/mem_ramp.py}"
 TARGET_MB="${TARGET_MB:-2400}"
 STEP_MB="${STEP_MB:-100}"
 STEP_DELAY="${STEP_DELAY:-5}"

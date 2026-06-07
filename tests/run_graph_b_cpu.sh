@@ -22,7 +22,8 @@ REAL_USER="${SUDO_USER:-$(id -un)}"
 REAL_UID="$(id -u "${REAL_USER}")"
 REAL_GID="$(id -g "${REAL_USER}")"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${SCRIPT_DIR}"
 [[ ! -d "${ROOT_DIR}/build" && -d "${ROOT_DIR}/../build" ]] && ROOT_DIR="$(cd "${ROOT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
@@ -37,15 +38,9 @@ CG_PARENT="${CG_ROOT}/${CG_NAME}"
 CG_LEAF="${CG_PARENT}/load"
 CG_REL="${CG_NAME}/load"
 
-# Поиск cpu_ramp.py: рядом со скриптом, иначе в home пользователя
-CPU_RAMP="${CPU_RAMP:-}"
-if [[ -z "${CPU_RAMP}" ]]; then
-  if [[ -f "${ROOT_DIR}/cpu_ramp.py" ]]; then CPU_RAMP="${ROOT_DIR}/cpu_ramp.py";
-  elif [[ -f "/home/${REAL_USER}/cpu_ramp.py" ]]; then CPU_RAMP="/home/${REAL_USER}/cpu_ramp.py";
-  else CPU_RAMP="${ROOT_DIR}/cpu_ramp.py"; fi
-fi
+CPU_RAMP="${CPU_RAMP:-${SCRIPT_DIR}/cpu_ramp.py}"
 
-TARGET_WORKERS="${TARGET_WORKERS:-7}"
+TARGET_WORKERS="${TARGET_WORKERS:-14}"
 STEP_DELAY="${STEP_DELAY:-5}"
 HOLD_SEC="${HOLD_SEC:-60}"
 RAMP_TIME=$(( TARGET_WORKERS * STEP_DELAY ))
@@ -103,7 +98,7 @@ cleanup_cgroup() {
 
 ensure_nats() {
   if ! (timeout 1 bash -c "</dev/tcp/127.0.0.1/4222") 2>/dev/null; then
-    as_user nats-server -a 127.0.0.1 -p 4222 >"${LOG_DIR}/nats-server.log" 2>&1 &
+    as_user nats-server -a 127.0.0.1 -p 4222 </dev/null >"${LOG_DIR}/nats-server.log" 2>&1 &
     sleep 1
   fi
 }
@@ -116,17 +111,17 @@ start_overlay() {
   : > "${LOG_DIR}/runtime_planner_agent.log" 2>/dev/null || true
 
   say "старт надстройки (${mode})"
-  as_user "${BUILD_DIR}/directory_agent"        --nats "${NATS_URL}" >"${LOG_DIR}/runtime_directory_agent.log" 2>&1 &
-  as_user "${BUILD_DIR}/lease_authority_agent"  --nats "${NATS_URL}" >"${LOG_DIR}/runtime_lease_authority_agent.log" 2>&1 &
+  as_user "${BUILD_DIR}/directory_agent"        --nats "${NATS_URL}" </dev/null >"${LOG_DIR}/runtime_directory_agent.log" 2>&1 &
+  as_user "${BUILD_DIR}/lease_authority_agent"  --nats "${NATS_URL}" </dev/null >"${LOG_DIR}/runtime_lease_authority_agent.log" 2>&1 &
   as_user "${BUILD_DIR}/system_monitor_agent"   --nats "${NATS_URL}" --interval-ms 500 --cgroup-root "${CG_ROOT}" \
-       >"${LOG_DIR}/runtime_system_monitor_agent.log" 2>&1 &
+       </dev/null >"${LOG_DIR}/runtime_system_monitor_agent.log" 2>&1 &
   as_user "${BUILD_DIR}/actuator_agent"         --nats "${NATS_URL}" --cgroup-root "${CG_ROOT}" \
-       >"${LOG_DIR}/runtime_actuator_agent.log" 2>&1 &
+       </dev/null >"${LOG_DIR}/runtime_actuator_agent.log" 2>&1 &
   if [[ "${mode}" == "with_planner" ]]; then
-    as_user "${BUILD_DIR}/planner_agent"        --nats "${NATS_URL}" >"${LOG_DIR}/runtime_planner_agent.log" 2>&1 &
+    as_user "${BUILD_DIR}/planner_agent"        --nats "${NATS_URL}" </dev/null >"${LOG_DIR}/runtime_planner_agent.log" 2>&1 &
   fi
   as_user "${BUILD_DIR}/metrics_collector_agent" --nats "${NATS_URL}" --reports-root "${ROOT_DIR}/reports" \
-       >"${LOG_DIR}/runtime_metrics_collector_agent.log" 2>&1 &
+       </dev/null >"${LOG_DIR}/runtime_metrics_collector_agent.log" 2>&1 &
   sleep 4
 }
 
@@ -137,7 +132,7 @@ start_ramp() {
   setsid bash -c "
     echo \$\$ > '${CG_LEAF}/cgroup.procs' 2>/dev/null
     exec python3 '${CPU_RAMP}' --target-workers ${TARGET_WORKERS} --step-delay ${STEP_DELAY} --hold-sec ${HOLD_SEC}
-  " >"${LOG_DIR}/cpu_ramp.log" 2>&1 &
+  " </dev/null >"${LOG_DIR}/cpu_ramp.log" 2>&1 &
   sleep 3
   if ! pgrep -f "cpu_ramp.py" >/dev/null 2>&1; then
     err "cpu_ramp не запустился:"; cat "${LOG_DIR}/cpu_ramp.log" 2>/dev/null | head; return 1
@@ -205,9 +200,10 @@ say "пауза между фазами"; sleep 5; cleanup_procs
 say "############ ФАЗА B: OVERLAY (с planner) ############"
 run_phase "with_planner" "overlay" || { err "overlay не удался"; cleanup_cgroup; exit 1; }
 
+stty sane 2>/dev/null || true
 echo ""
 echo "############################################################"
-echo "#     ГРАФИК Б (растущая CPU-нагрузка): РИСК                #"
+echo "#          РИСК (растущая CPU-нагрузка)                    #"
 echo "############################################################"
 analyze "${RESULT_DIR}/risk_baseline.log" "BASELINE (без надстройки)"
 analyze "${RESULT_DIR}/risk_overlay.log"  "OVERLAY (с надстройкой)"
@@ -220,10 +216,10 @@ grep -ioE "cpu.max|cpu.weight|updated|applied|failed" "${RESULT_DIR}/actuator_ov
 
 echo ""
 echo "ИНТЕРПРЕТАЦИЯ:"
-echo "  - baseline HIGH высокий + overlay HIGH НИЖЕ → ГРАФИК ПОДТВЕРЖДЁН."
+echo "  - baseline HIGH высокий + overlay HIGH НИЖЕ → надстройка снизила риск."
 echo "  - baseline CPU% max < 85 → нагрузка слаба, подними TARGET_WORKERS (до 8)."
 echo "  - Planner SET_CPU_MAX>0 и Actuator 'cpu.max updated' → надстройка реально режет CPU."
-echo "  - overlay CPU% max ниже baseline → cpu.max ограничил загрузку (прямое доказательство)."
+echo "  - overlay CPU% max ниже baseline → cpu.max ограничил загрузку."
 
 cleanup_cgroup
 say "готово. Логи: ${RESULT_DIR}/risk_baseline.log, risk_overlay.log"
